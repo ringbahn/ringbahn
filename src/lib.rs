@@ -57,19 +57,3 @@ pub trait Submit {
     fn prepare(&mut self, prepare: impl FnOnce(iou::SubmissionQueueEvent<'_>));
     fn submit(&mut self) -> io::Result<usize>;
 }
-
-pub unsafe trait OwnedBuffer: Unpin + 'static {
-    unsafe fn dealloc(ptr: *mut [u8]);
-}
-
-unsafe impl OwnedBuffer for Vec<u8> {
-    unsafe fn dealloc(ptr: *mut [u8]) {
-        drop(Box::from_raw(ptr))
-    }
-}
-
-unsafe impl OwnedBuffer for Box<[u8]> {
-    unsafe fn dealloc(ptr: *mut [u8]) {
-        drop(Box::from_raw(ptr))
-    }
-}

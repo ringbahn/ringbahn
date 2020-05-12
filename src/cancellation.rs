@@ -1,7 +1,4 @@
 use std::ptr;
-use std::slice;
-
-use crate::OwnedBuffer;
 
 pub struct Cancellation {
     data: *mut (),
@@ -36,12 +33,11 @@ impl Cancellation {
         (self.callback)(self.data, self.metadata)
     }
 
-    pub(crate) unsafe fn buffer<B: OwnedBuffer>(data: *mut [u8], len: usize) -> Cancellation {
-        unsafe fn callback<B: OwnedBuffer>(data: *mut (), len: usize) {
-            let slice: *mut [u8] = slice::from_raw_parts_mut(data as *mut u8, len);
-            B::dealloc(slice)
+    pub(crate) unsafe fn buffer(data: *mut u8, len: usize) -> Cancellation {
+        unsafe fn callback(data: *mut (), len: usize) {
+            drop(Vec::from_raw_parts(data as *mut u8, len, len))
         }
 
-        Cancellation::new(data as *mut (), len, callback::<B>)
+        Cancellation::new(data as *mut (), len, callback)
     }
 }
