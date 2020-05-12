@@ -1,0 +1,17 @@
+[package]
+name = "ringbahn"
+version = "0.1.0"
+authors = ["Without Boats <woboats@gmail.com>"]
+repository = "https://github.com/withoutboats/ringbahn"
+license = "MIT OR Apache-2.0"
+edition = "2018"
+
+[dependencies]
+parking_lot = "0.10.2"
+once_cell = "1.3.1"
+
+[dependencies.iou]
+path = "../iou"
+
+[dev-dependencies]
+async-std = "1.5.0"
