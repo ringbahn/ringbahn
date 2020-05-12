@@ -24,6 +24,11 @@ Currently it is a prototype; more complete, advanced, and performant APIs are ce
 However, I hope that this library acts as a stepping stone toward a correct interface for io-uring
 in Rust.
 
+## Warning
+
+This is currently a very experimental prototype. It contains a lot of unsafe code which has not been
+sufficiently tested. Please do not use it in production. Tests, bug reports, feedback, and
+experiments are all very welcome at this stage.
 
 ## License
 
