@@ -22,7 +22,7 @@ impl<'a> Submit for &'a Driver {
         loop {
             match driver.next_sqe() {
                 Some(sqe)   => break prepare(sqe),
-                None        => { let _ = self.submit(); }
+                None        => { let _ = driver.submit(); }
             }
         }
     }
