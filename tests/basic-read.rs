@@ -1,5 +1,7 @@
 use std::fs::File;
-use ringbahn::{Read, Event, DRIVER};
+
+use ringbahn::event::{Read, Event};
+use ringbahn::DRIVER;
 
 const ASSERT: &[u8] = b"But this formidable power of death -";
 

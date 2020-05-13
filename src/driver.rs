@@ -34,8 +34,13 @@ impl<'a> Submit for &'a Driver {
         }
     }
 
-    fn poll_submit(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<usize>> {
-        Poll::Ready(self.driver.lock().submit())
+    fn poll_submit(self: Pin<&mut Self>, _: &mut Context<'_>, eager: bool) -> Poll<io::Result<usize>> {
+        let result = if eager {
+            self.driver.lock().submit()
+        } else {
+            Ok(0)
+        };
+        Poll::Ready(result)
     }
 }
 
