@@ -5,7 +5,8 @@ use std::pin::Pin;
 use std::ptr::NonNull;
 use std::task::{Context, Poll};
 
-use crate::{Event, Submit, Completion};
+use crate::{Event, Submit};
+use crate::driver::Completion;
 
 pub struct Submission<E: Event, S> {
     state: State,
@@ -49,12 +50,9 @@ impl<E: Event, S: Submit> Submission<E, S> {
     #[inline(always)]
     unsafe fn try_submit(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) {
         let (event, driver) = self.as_mut().event_and_driver();
-        match driver.poll_submit(ctx, event.is_eager()) {
-            Poll::Ready(result)  => {
-                let _ = result; // TODO figure out how to handle this result
-                Pin::get_unchecked_mut(self).state = State::Submitted;
-            }
-            Poll::Pending       => { }
+        if let Poll::Ready(result) = driver.poll_submit(ctx, event.is_eager()) {
+            let _ = result; // TODO figure out how to handle this result
+            Pin::get_unchecked_mut(self).state = State::Submitted;
         }
     }
 
@@ -141,7 +139,7 @@ impl<E: Event, S> Drop for Submission<E, S> {
 unsafe fn prepare<E: Event>(
     sqe: iou::SubmissionQueueEvent<'_>,
     ctx: &mut Context<'_>,
-    event: &mut E
+    event: &mut E,
 ) -> NonNull<Completion> {
     // Use the SubmissionCleaner guard to clear the submission of any data
     // in case the Event::prepare method panics

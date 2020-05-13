@@ -5,7 +5,7 @@ use std::task::Waker;
 
 use parking_lot::Mutex;
 
-use crate::Cancellation;
+use crate::event::Cancellation;
 
 pub struct Completion {
     state: Mutex<State>,

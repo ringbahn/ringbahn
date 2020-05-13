@@ -2,7 +2,7 @@ use std::os::unix::io::AsRawFd;
 use std::mem::ManuallyDrop;
 use std::marker::Unpin;
 
-use crate::{Event, Cancellation};
+use super::{Event, Cancellation};
 
 pub struct Read<'a, T> {
     pub io: &'a mut T,
