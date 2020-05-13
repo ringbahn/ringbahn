@@ -1,10 +1,14 @@
+mod cancellation;
+
 mod read;
 mod write;
 
 use std::marker::Unpin;
 use std::mem::ManuallyDrop;
 
-use crate::{Cancellation, Submission, Submit};
+use crate::{Submission, Submit};
+
+pub use cancellation::Cancellation;
 
 pub use read::Read;
 pub use write::Write;

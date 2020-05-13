@@ -7,7 +7,7 @@ use std::task::{Context, Poll};
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 
-use crate::{Submit, Completion};
+use super::{Submit, Completion};
 
 const ENTRIES: u32 = 32;
 
@@ -57,9 +57,9 @@ fn init() -> Mutex<iou::SubmissionQueue<'static>> {
 unsafe fn complete(mut cq: iou::CompletionQueue<'static>) {
     // TODO handle IO errors on completion returning
     while let Ok(cqe) = cq.wait_for_cqe() {
-        crate::complete(cqe);
+        super::complete(cqe);
         while let Some(cqe) = cq.peek_for_cqe() {
-            crate::complete(cqe);
+            super::complete(cqe);
         }
     }
 }
