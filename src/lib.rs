@@ -9,12 +9,14 @@ mod write;
 use std::io;
 use std::marker::Unpin;
 use std::mem::ManuallyDrop;
+use std::pin::Pin;
+use std::ptr::NonNull;
+use std::task::{Context, Poll};
 
 pub use cancellation::Cancellation;
-pub use completion::complete;
+pub use completion::{Completion, complete};
 pub use submission::Submission;
 
-pub(crate) use completion::Completion;
 
 pub use driver::{DRIVER, Driver};
 pub use read::Read;
@@ -48,12 +50,18 @@ pub trait Event: Unpin {
     /// can be cleaned up once the kernel no longer needs them.
     fn cancellation(this: &mut ManuallyDrop<Self>) -> Cancellation;
 
-    fn submit<S: Submit>(self, submitter: S) -> Submission<Self, S> where Self: Sized {
-        Submission::new(self, submitter)
+    fn submit<S: Submit>(self, driver: S) -> Submission<Self, S> where Self: Sized {
+        Submission::new(self, driver)
     }
 }
 
 pub trait Submit {
-    fn prepare(&mut self, prepare: impl FnOnce(iou::SubmissionQueueEvent<'_>));
-    fn submit(&mut self) -> io::Result<usize>;
+    fn poll_prepare(
+        self: Pin<&mut Self>,
+        ctx: &mut Context<'_>,
+        prepare: impl FnOnce(iou::SubmissionQueueEvent<'_>, &mut Context<'_>) -> NonNull<Completion>,
+    ) -> Poll<NonNull<Completion>>;
+
+    fn poll_submit(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<io::Result<usize>>;
+
 }
