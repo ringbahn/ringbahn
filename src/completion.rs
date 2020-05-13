@@ -12,26 +12,26 @@ pub struct Completion {
 }
 
 enum State {
-    Submitted(Option<Waker>),
+    Submitted(Waker),
     Completed(i32),
     Cancelled(Cancellation),
 }
 
 impl Completion {
-    pub fn new() -> Completion {
+    pub(crate) fn new(waker: Waker) -> Completion {
         Completion {
-            state: Mutex::new(State::Submitted(None)),
+            state: Mutex::new(State::Submitted(waker)),
         }
     }
 
-    pub fn set_waker(&mut self, waker: Waker) {
+    pub(crate) fn set_waker(&mut self, waker: Waker) {
         let mut state = self.state.lock();
         if let State::Submitted(slot) = &mut *state {
-            *slot = Some(waker);
+            *slot = waker;
         }
     }
 
-    pub fn cancel(&self, mut callback: Cancellation) {
+    pub(crate) fn cancel(&self, mut callback: Cancellation) {
         unsafe {
             let mut state = self.state.lock();
             if matches!(&*state, State::Completed(_)) {
@@ -43,7 +43,7 @@ impl Completion {
         }
     }
 
-    pub fn check(&self) -> Option<io::Result<usize>> {
+    pub(crate) fn check(&self) -> Option<io::Result<usize>> {
         let state = self.state.lock();
         match *state {
             State::Completed(result)    => {
@@ -65,8 +65,7 @@ pub unsafe fn complete(cqe: iou::CompletionQueueEvent) {
     if completion != ptr::null_mut() {
         let mut state = (*completion).state.lock();
         match mem::replace(&mut *state, State::Completed(cqe.raw_result())) {
-            State::Submitted(Some(waker))   => waker.wake(),
-            State::Submitted(None)          => (),
+            State::Submitted(waker)         => waker.wake(),
             State::Cancelled(mut callback)  => {
                 drop(Box::from_raw(completion));
                 callback.cancel();

@@ -1,10 +1,13 @@
 use std::io;
+use std::pin::Pin;
+use std::ptr::NonNull;
 use std::thread;
+use std::task::{Context, Poll};
 
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 
-use crate::Submit;
+use crate::{Submit, Completion};
 
 const ENTRIES: u32 = 32;
 
@@ -17,18 +20,22 @@ pub struct Driver {
 }
 
 impl<'a> Submit for &'a Driver {
-    fn prepare(&mut self, prepare: impl FnOnce(iou::SubmissionQueueEvent<'_>)) {
+    fn poll_prepare(
+        self: Pin<&mut Self>,
+        ctx: &mut Context<'_>,
+        prepare: impl FnOnce(iou::SubmissionQueueEvent<'_>, &mut Context<'_>) -> NonNull<Completion>,
+    ) -> Poll<NonNull<Completion>> {
         let mut driver = self.driver.lock();
         loop {
             match driver.next_sqe() {
-                Some(sqe)   => break prepare(sqe),
+                Some(sqe)   => return Poll::Ready(prepare(sqe, ctx)),
                 None        => { let _ = driver.submit(); }
             }
         }
     }
 
-    fn submit(&mut self) -> io::Result<usize> {
-        self.driver.lock().submit()
+    fn poll_submit(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<usize>> {
+        Poll::Ready(self.driver.lock().submit())
     }
 }
 
