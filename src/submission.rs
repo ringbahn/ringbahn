@@ -5,6 +5,8 @@ use std::pin::Pin;
 use std::ptr::NonNull;
 use std::task::{Context, Poll};
 
+use futures_core::ready;
+
 use crate::{Event, Drive};
 use crate::driver::Completion;
 
@@ -36,24 +38,20 @@ impl<E: Event, D: Drive> Submission<E, D> {
     #[inline(always)]
     unsafe fn try_prepare(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<()> {
         let (event, driver) = self.as_mut().event_and_driver();
-        match driver.poll_prepare(ctx, |sqe, ctx| prepare(sqe, ctx, event)) {
-            Poll::Ready(completion) => {
-                let this = Pin::get_unchecked_mut(self);
-                this.state = State::Prepared;
-                this.completion = completion;
-                Poll::Ready(())
-            }
-            Poll::Pending           => Poll::Pending,
-        }
+        let completion = ready!(driver.poll_prepare(ctx, |sqe, ctx| prepare(sqe, ctx, event)));
+        let this = Pin::get_unchecked_mut(self);
+        this.state = State::Prepared;
+        this.completion = completion;
+        Poll::Ready(())
     }
 
     #[inline(always)]
-    unsafe fn try_submit(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) {
+    unsafe fn try_submit(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<()> {
         let (event, driver) = self.as_mut().event_and_driver();
-        if let Poll::Ready(result) = driver.poll_submit(ctx, event.is_eager()) {
-            let _ = result; // TODO figure out how to handle this result
-            Pin::get_unchecked_mut(self).state = State::Submitted;
-        }
+        // TODO figure out how to handle this result
+        let _ = ready!(driver.poll_submit(ctx, event.is_eager()));
+        Pin::get_unchecked_mut(self).state = State::Submitted;
+        Poll::Pending
     }
 
     #[inline(always)]
@@ -92,9 +90,8 @@ impl<E, D> Future for Submission<E, D> where
                 // In the waiting state, first attempt to prepare the event
                 // for submission. If that succeeds, also attempt to submit it.
                 State::Waiting     => {
-                    if let Poll::Ready(()) = self.as_mut().try_prepare(ctx) {
-                        self.as_mut().try_submit(ctx);
-                    }
+                    ready!(self.as_mut().try_prepare(ctx));
+                    ready!(self.as_mut().try_submit(ctx));
                     Poll::Pending
                 }
 
@@ -106,7 +103,7 @@ impl<E, D> Future for Submission<E, D> where
                     match self.as_mut().try_complete(ctx) {
                         ready @ Poll::Ready(..) => ready,
                         Poll::Pending           => {
-                            self.as_mut().try_submit(ctx);
+                            ready!(self.as_mut().try_submit(ctx));
                             Poll::Pending
                         }
                     }
