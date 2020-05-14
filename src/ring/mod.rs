@@ -10,18 +10,24 @@ use futures_core::ready;
 use futures_io::{AsyncRead, AsyncBufRead};
 
 use crate::event::Cancellation;
-use crate::driver::Drive;
+use crate::driver::{Drive, Driver};
 
 use engine::Engine;
 
-pub struct Ring<IO, D> {
+pub struct Ring<IO, D = &'static Driver> {
     engine: Engine<D>,
     io: IO,
     buf: Buffer,
 }
 
+impl<IO: AsRawFd + io::Read, D: Drive + Default> Ring<IO, D> {
+    pub fn new(io: IO) -> Ring<IO, D> {
+        Ring::on_driver(io, D::default())
+    }
+}
+
 impl<IO: AsRawFd + io::Read, D: Drive> Ring<IO, D> {
-    pub fn new(io: IO, driver: D) -> Ring<IO, D> {
+    pub fn on_driver(io: IO, driver: D) -> Ring<IO, D> {
         Ring {
             engine: Engine::new(driver),
             buf: Buffer::new(&io),

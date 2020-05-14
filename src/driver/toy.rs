@@ -19,6 +19,12 @@ pub struct Driver {
     driver: Lazy<Mutex<iou::SubmissionQueue<'static>>>,
 }
 
+impl Default for &'_ Driver {
+    fn default() -> Self {
+        &DRIVER
+    }
+}
+
 impl<'a> Drive for &'a Driver {
     fn poll_prepare(
         self: Pin<&mut Self>,
