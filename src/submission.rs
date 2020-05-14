@@ -64,7 +64,7 @@ impl<E: Event, D: Drive> Submission<E, D> {
             let event = ManuallyDrop::take(&mut this.event);
             Poll::Ready((event, result))
         } else {
-            this.completion.as_mut().set_waker(ctx.waker().clone());
+            this.completion.as_ref().set_waker(ctx.waker().clone());
             Poll::Pending
         }
     }
