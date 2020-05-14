@@ -69,9 +69,8 @@ impl<IO: io::Read + AsRawFd, D: Drive> AsyncRead for Ring<IO, D> {
         -> Poll<io::Result<usize>>
     {
         match self.as_mut().poll_fill_buf(ctx) {
-            Poll::Ready(Ok(inner))  => {
-                let len = cmp::min(inner.len(), buf.len());
-                buf[0..len].copy_from_slice(&inner[0..len]);
+            Poll::Ready(Ok(mut inner))  => {
+                let len = io::Read::read(&mut inner, buf)?;
                 self.as_mut().consume(len);
                 Poll::Ready(Ok(len))
             }
