@@ -19,3 +19,7 @@ branch = "new-apis-needed-for-ringbahn"
 [dev-dependencies]
 async-std = "1.5.0"
 futures = "0.3.5"
+
+[features]
+nightly = []
+

@@ -1,4 +1,4 @@
-#![feature(read_initializer)]
+#![cfg_attr(feature = "nightly", feature(read_initializer))]
 
 pub mod driver;
 pub mod event;

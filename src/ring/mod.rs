@@ -82,15 +82,21 @@ struct Buffer {
 }
 
 impl Buffer {
-    fn new<IO: io::Read>(io: &IO) -> Buffer {
+    fn new<IO: io::Read>(#[allow(unused_variables)] io: &IO) -> Buffer {
         unsafe {
             const CAPACITY: usize = 1024 * 8;
             let mut buf = Vec::with_capacity(CAPACITY);
             buf.set_len(CAPACITY);
 
-            let initializer = io.initializer();
-            if initializer.should_initialize() {
-                initializer.initialize(&mut buf[..]);
+            #[cfg(feature = "nightly")] {
+                let initializer = io.initializer();
+                if initializer.should_initialize() {
+                    initializer.initialize(&mut buf[..]);
+                }
+            }
+
+            #[cfg(not(feature = "nightly"))] {
+                std::ptr::write_bytes(buf.as_mut_ptr(), 0, CAPACITY)
             }
 
             Buffer {
