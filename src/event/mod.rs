@@ -6,7 +6,7 @@ mod write;
 use std::marker::Unpin;
 use std::mem::ManuallyDrop;
 
-use crate::{Submission, Submit};
+use crate::{Submission, Drive};
 
 pub use cancellation::Cancellation;
 
@@ -43,7 +43,7 @@ pub trait Event: Unpin {
     /// can be cleaned up once the kernel no longer needs them.
     fn cancellation(this: &mut ManuallyDrop<Self>) -> Cancellation;
 
-    fn submit<S: Submit>(self, driver: S) -> Submission<Self, S> where Self: Sized {
+    fn submit<D: Drive>(self, driver: D) -> Submission<Self, D> where Self: Sized {
         Submission::new(self, driver)
     }
 
