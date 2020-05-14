@@ -5,13 +5,13 @@ use std::pin::Pin;
 use std::ptr::NonNull;
 use std::task::{Context, Poll};
 
-use crate::{Event, Submit};
+use crate::{Event, Drive};
 use crate::driver::Completion;
 
-pub struct Submission<E: Event, S> {
+pub struct Submission<E: Event, D> {
     state: State,
     event: ManuallyDrop<E>,
-    driver: ManuallyDrop<S>,
+    driver: ManuallyDrop<D>,
     completion: NonNull<Completion>,
 }
 
@@ -23,8 +23,8 @@ enum State {
     Complete,
 }
 
-impl<E: Event, S: Submit> Submission<E, S> {
-    pub fn new(event: E, driver: S) -> Submission<E, S> {
+impl<E: Event, D: Drive> Submission<E, D> {
+    pub fn new(event: E, driver: D) -> Submission<E, D> {
         Submission {
             state: State::Waiting,
             event: ManuallyDrop::new(event),
@@ -72,17 +72,17 @@ impl<E: Event, S: Submit> Submission<E, S> {
     }
 
     #[inline(always)]
-    fn event_and_driver(self: Pin<&mut Self>) -> (&mut E, Pin<&mut S>) {
+    fn event_and_driver(self: Pin<&mut Self>) -> (&mut E, Pin<&mut D>) {
         unsafe {
-            let this: &mut Submission<E, S> = Pin::get_unchecked_mut(self);
+            let this: &mut Submission<E, D> = Pin::get_unchecked_mut(self);
             (&mut this.event, Pin::new_unchecked(&mut this.driver))
         }
     }
 }
 
-impl<E, S> Future for Submission<E, S> where
+impl<E, D> Future for Submission<E, D> where
     E: Event,
-    S: Submit,
+    D: Drive,
 {
     type Output = (E, io::Result<usize>);
 
@@ -125,7 +125,7 @@ impl<E, S> Future for Submission<E, S> where
 }
 
 
-impl<E: Event, S> Drop for Submission<E, S> {
+impl<E: Event, D> Drop for Submission<E, D> {
     fn drop(&mut self) {
         if matches!(self.state, State::Prepared | State::Submitted) {
             unsafe {

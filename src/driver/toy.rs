@@ -7,7 +7,7 @@ use std::task::{Context, Poll};
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 
-use super::{Submit, Completion};
+use super::{Drive, Completion};
 
 const ENTRIES: u32 = 32;
 
@@ -19,7 +19,7 @@ pub struct Driver {
     driver: Lazy<Mutex<iou::SubmissionQueue<'static>>>,
 }
 
-impl<'a> Submit for &'a Driver {
+impl<'a> Drive for &'a Driver {
     fn poll_prepare(
         self: Pin<&mut Self>,
         ctx: &mut Context<'_>,

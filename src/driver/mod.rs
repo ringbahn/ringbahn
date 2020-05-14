@@ -11,7 +11,7 @@ pub use completion::{Completion, complete};
 
 use crate::{Submission, Event};
 
-pub trait Submit {
+pub trait Drive {
     fn poll_prepare(
         self: Pin<&mut Self>,
         ctx: &mut Context<'_>,
