@@ -24,7 +24,7 @@ impl Completion {
         }
     }
 
-    pub(crate) fn set_waker(&mut self, waker: Waker) {
+    pub(crate) fn set_waker(&self, waker: Waker) {
         let mut state = self.state.lock();
         if let State::Submitted(slot) = &mut *state {
             *slot = waker;

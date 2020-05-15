@@ -9,10 +9,12 @@ edition = "2018"
 [dependencies]
 parking_lot = "0.10.2"
 once_cell = "1.3.1"
+futures-io = "0.3.5"
+futures-core = "0.3.5"
 
 [dependencies.iou]
 git = "https://github.com/withoutboats/iou"
 branch = "new-apis-needed-for-ringbahn"
 
 [dev-dependencies]
-async-std = "1.5.0"
+futures = "0.3.5"
