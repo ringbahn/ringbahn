@@ -18,7 +18,3 @@ branch = "new-apis-needed-for-ringbahn"
 
 [dev-dependencies]
 futures = "0.3.5"
-
-[features]
-nightly = []
-

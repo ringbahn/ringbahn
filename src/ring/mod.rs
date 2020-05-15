@@ -12,30 +12,27 @@ use crate::driver::{Drive, Driver};
 
 use engine::Engine;
 
-pub trait AsyncBufWrite {
-    fn poll_partial_flush_buf(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<io::Result<&mut [u8]>>;
-
-    fn produce(self: Pin<&mut Self>, amt: usize);
-}
-
 pub struct Ring<IO, D = &'static Driver> {
     engine: Engine,
     io: IO,
     driver: D,
 }
 
-impl<IO: AsRawFd + io::Read, D: Drive + Default> Ring<IO, D> {
+impl<IO: AsRawFd, D: Drive + Default> Ring<IO, D> {
     pub fn new(io: IO) -> Ring<IO, D> {
         Ring::on_driver(io, D::default())
     }
 }
 
-impl<IO: AsRawFd + io::Read, D: Drive> Ring<IO, D> {
+impl<IO: AsRawFd, D: Drive> Ring<IO, D> {
     pub fn on_driver(io: IO, driver: D) -> Ring<IO, D> {
-        Ring {
-            engine: Engine::new(&io),
-            io, driver,
-        }
+        let engine = Engine::new();
+        Ring { engine, io, driver }
+    }
+
+    /// Cancel interest in any ongoing IO.
+    pub fn cancel(&mut self) {
+        self.engine.cancel();
     }
 }
 
@@ -74,25 +71,10 @@ impl<IO: io::Read + AsRawFd, D: Drive> AsyncRead for Ring<IO, D> {
     }
 }
 
-impl<IO: io::Write + AsRawFd, D: Drive> AsyncBufWrite for Ring<IO, D> {
-    fn poll_partial_flush_buf(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<io::Result<&mut [u8]>> {
-        let (engine, io, driver) = self.split();
-        engine.poll_partial_flush_write_buf(ctx, driver, io.as_raw_fd())
-    }
-
-    fn produce(self: Pin<&mut Self>, amt: usize) {
-        let (engine, ..) = self.split();
-        engine.produce(amt);
-    }
-}
-
 impl<IO: io::Write + AsRawFd, D: Drive> AsyncWrite for Ring<IO, D> {
-    fn poll_write(mut self: Pin<&mut Self>, ctx: &mut Context<'_>, buf: &[u8]) -> Poll<io::Result<usize>> {
-        // TODO consider only flushing if strictly necessary
-        let mut inner = ready!(self.as_mut().poll_partial_flush_buf(ctx))?;
-        let len = io::Write::write(&mut inner, buf)?;
-        self.produce(len);
-        Poll::Ready(Ok(len))
+    fn poll_write(self: Pin<&mut Self>, ctx: &mut Context<'_>, buf: &[u8]) -> Poll<io::Result<usize>> {
+        let (engine, io, driver) = self.split();
+        engine.poll_write(ctx, driver, io.as_raw_fd(), buf)
     }
 
     fn poll_flush(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<io::Result<()>> {

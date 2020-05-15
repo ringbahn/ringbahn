@@ -20,21 +20,22 @@ pub struct Engine {
     completion: NonNull<Completion>,
 }
 
-#[derive(Copy, Clone, Eq, PartialEq)]
+#[derive(Copy, Clone, Eq, PartialEq, Debug)]
 enum State {
     Inert,
     ReadPrepared,
     ReadSubmitted,
+    WriteBuffered,
     WritePrepared,
     WriteSubmitted,
 }
 
 impl Engine {
-    pub fn new<IO: io::Read>(io: &IO) -> Engine {
+    pub fn new() -> Engine {
         Engine {
             state: Inert,
-            read_buf: Buffer::new(io),
-            write_buf: Buffer::new(io),
+            read_buf: Buffer::new(),
+            write_buf: Buffer::new(),
             completion: NonNull::dangling(),
         }
     }
@@ -59,30 +60,18 @@ impl Engine {
         self.read_buf.consume(amt);
     }
 
-    pub fn poll_partial_flush_write_buf<D: Drive>(
-        &mut self,
-        ctx: &mut Context<'_>,
-        driver: Pin<&mut D>,
-        fd: RawFd,
-    ) -> Poll<io::Result<&mut [u8]>> {
-        if self.write_buf.fresh().is_empty() {
-            ready!(self.poll_flush_write_buf(ctx, driver, fd))?;
-        }
-        Poll::Ready(Ok(self.write_buf.fresh()))
-    }
-
     pub fn poll_flush_write_buf<D: Drive>(
         &mut self,
         ctx: &mut Context<'_>,
         mut driver: Pin<&mut D>,
-        fd: RawFd
+        fd: RawFd,
     )-> Poll<io::Result<()>> {
         let result = loop {
             if self.write_buf.pos >= self.write_buf.cap {
                 break Ok(());
             }
 
-            match ready!(self.poll_write(ctx, driver.as_mut(), fd)) {
+            match ready!(self.poll_write(ctx, driver.as_mut(), fd, &[])) {
                 Ok(0)   => break Err(io::Error::new(io::ErrorKind::WriteZero, "write failed")),
                 Ok(n)   => self.write_buf.pos += n,
                 Err(e)  => break Err(e),
@@ -93,24 +82,66 @@ impl Engine {
     }
 
     #[inline(always)]
-    pub fn produce(&mut self, amt: usize) {
-        self.write_buf.produce(amt);
+    pub fn poll_write<D: Drive>(
+        &mut self,
+        ctx: &mut Context<'_>,
+        mut driver: Pin<&mut D>,
+        fd: RawFd,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        unsafe {
+            match self.state {
+                WriteSubmitted  => self.try_complete(ctx),
+                WritePrepared   => {
+                    match self.try_complete(ctx) {
+                        ready @ Poll::Ready(..) => ready,
+                        Poll::Pending           => {
+                            ready!(self.try_submit(ctx, driver));
+                            self.state = WriteSubmitted;
+                            Poll::Pending
+                        }
+                    }
+                }
+                _               => {
+                    if !matches!(self.state, WriteBuffered) {
+                        self.cancel();
+                        self.write_buf.write(buf);
+                        self.state = WriteBuffered;
+                    }
+                    self.completion = ready!(driver.as_mut().poll_prepare(ctx, |sqe, ctx| {
+                        prepare_write(sqe, ctx, fd, &mut self.write_buf.active())
+                    }));
+                    self.state = WritePrepared;
+                    ready!(self.try_submit(ctx, driver));
+                    self.state = WriteSubmitted;
+                    Poll::Pending
+                }
+            }
+        }
     }
 
+
     #[inline(always)]
-    fn cancel(&mut self) {
+    pub fn cancel(&mut self) {
         unsafe {
             match self.state {
                 ReadPrepared | ReadSubmitted    => {
                     let data = self.read_buf.buf.as_mut_ptr();
                     let len = self.read_buf.buf.len();
                     self.completion.as_ref().cancel(Cancellation::buffer(data, len));
+                    self.read_buf = Buffer::new();
                     self.state = Inert;
                 }
                 WritePrepared | WriteSubmitted  => {
                     let data = self.write_buf.buf.as_mut_ptr();
                     let len = self.write_buf.buf.len();
                     self.completion.as_ref().cancel(Cancellation::buffer(data, len));
+                    self.write_buf = Buffer::new();
+                    self.state = Inert;
+                }
+                WriteBuffered                   => {
+                    self.write_buf.pos = 0;
+                    self.write_buf.cap = 0;
                     self.state = Inert;
                 }
                 Inert                           => { }
@@ -146,40 +177,6 @@ impl Engine {
                     self.state = ReadPrepared;
                     ready!(self.try_submit(ctx, driver));
                     self.state = ReadSubmitted;
-                    Poll::Pending
-                }
-            }
-        }
-    }
-
-    #[inline(always)]
-    fn poll_write<D: Drive>(
-        &mut self,
-        ctx: &mut Context<'_>,
-        mut driver: Pin<&mut D>,
-        fd: RawFd,
-    ) -> Poll<io::Result<usize>> {
-        unsafe {
-            match self.state {
-                WriteSubmitted  => self.try_complete(ctx),
-                WritePrepared   => {
-                    match self.try_complete(ctx) {
-                        ready @ Poll::Ready(..) => ready,
-                        Poll::Pending           => {
-                            ready!(self.try_submit(ctx, driver));
-                            self.state = WriteSubmitted;
-                            Poll::Pending
-                        }
-                    }
-                }
-                _               => {
-                    self.cancel();
-                    self.completion = ready!(driver.as_mut().poll_prepare(ctx, |sqe, ctx| {
-                        prepare_write(sqe, ctx, fd, &mut self.write_buf.active())
-                    }));
-                    self.state = WritePrepared;
-                    ready!(self.try_submit(ctx, driver));
-                    self.state = WriteSubmitted;
                     Poll::Pending
                 }
             }
@@ -267,39 +264,24 @@ struct Buffer {
 }
 
 impl Buffer {
-    fn new<IO: io::Read>(#[allow(unused_variables)] io: &IO) -> Buffer {
-        unsafe {
-            const CAPACITY: usize = 1024 * 8;
-            let mut buf = Vec::with_capacity(CAPACITY);
-            buf.set_len(CAPACITY);
-
-            #[cfg(feature = "nightly")] {
-                let initializer = io.initializer();
-                if initializer.should_initialize() {
-                    initializer.initialize(&mut buf[..]);
-                }
-            }
-
-            #[cfg(not(feature = "nightly"))] {
-                std::ptr::write_bytes(buf.as_mut_ptr(), 0, CAPACITY)
-            }
-
-            Buffer {
-                buf: buf.into_boxed_slice(),
-                pos: 0,
-                cap: 0,
-            }
+    fn new() -> Buffer {
+        Buffer {
+            buf: vec![0; 1024 * 8].into_boxed_slice(),
+            pos: 0,
+            cap: 0,
         }
+    }
+
+    #[inline(always)]
+    fn write(&mut self, buf: &[u8]) {
+        let len = io::Write::write(&mut &mut self.buf[..], buf).unwrap();
+        self.pos = 0;
+        self.cap = len;
     }
 
     #[inline(always)]
     fn active(&self) -> &[u8] {
         &self.buf[self.pos..self.cap]
-    }
-
-    #[inline(always)]
-    fn fresh(&mut self) -> &mut [u8] {
-        &mut self.buf[self.cap..]
     }
 
     #[inline(always)]
@@ -312,9 +294,5 @@ impl Buffer {
     #[inline(always)]
     fn consume(&mut self, amt: usize) {
         self.pos = cmp::min(self.pos + amt, self.cap);
-    }
-
-    fn produce(&mut self, amt: usize) {
-        self.cap = cmp::min(self.cap + amt, self.buf.len());
     }
 }
