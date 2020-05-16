@@ -1,12 +1,12 @@
 mod completion;
-mod toy;
+
+pub mod demo;
 
 use std::io;
 use std::pin::Pin;
 use std::ptr::NonNull;
 use std::task::{Context, Poll};
 
-pub use toy::{Driver, DRIVER};
 pub use completion::{Completion, complete};
 
 use crate::{Submission, Event};

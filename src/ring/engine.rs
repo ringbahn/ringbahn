@@ -9,7 +9,7 @@ use std::ptr::NonNull;
 use std::task::{Context, Poll};
 
 use crate::event::Cancellation;
-use crate::driver::{Drive, Completion};
+use crate::drive::{Drive, Completion};
 
 use State::*;
 
