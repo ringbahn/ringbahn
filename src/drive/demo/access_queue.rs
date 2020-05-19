@@ -149,12 +149,12 @@ impl<'a, T> Drop for AccessGuard<'a, T> {
 
 #[inline(always)]
 fn block(count: &AtomicUsize, amt: usize) -> bool {
-        let mut current = count.load(SeqCst);
-        while current >= amt {
-            match count.compare_exchange_weak(current, current - amt, SeqCst, SeqCst) {
-                Ok(_)   => return true,
-                Err(n)  => current = n,
-            }
+    let mut current = count.load(SeqCst);
+    while current >= amt {
+        match count.compare_exchange_weak(current, current - amt, SeqCst, SeqCst) {
+            Ok(_)   => return true,
+            Err(n)  => current = n,
         }
-        false
+    }
+    false
 }
