@@ -7,7 +7,7 @@ use std::sync::atomic::Ordering::SeqCst;
 use std::task::{Context, Poll};
 
 use futures_core::ready;
-use event_listener::{Event, EventListener};
+use event_listener::{Event, EventListener, EventLock};
 
 pub struct AccessQueue<T> {
     count: AtomicUsize,
@@ -48,20 +48,42 @@ impl<T> AccessQueue<T> {
     /// Returns true if it successfully blocked that many accesses. Returns false otherwise;
     /// if it returns false, the number of accesses in the queue remains unchanged.
     pub fn block(&self, amt: usize) -> bool {
-        let mut current = self.count.load(SeqCst);
-        while current >= amt {
-            match self.count.compare_exchange_weak(current, current - amt, SeqCst, SeqCst) {
-                Ok(_)   => return true,
-                Err(n)  => current = n,
-            }
-        }
-        false
+        block(&self.count, amt)
     }
 
     /// Release some number of accesses to the queue.
     pub fn release(&self, amt: usize) {
         self.count.fetch_add(amt, SeqCst);
         self.event.notify(amt);
+    }
+
+    pub fn lock(&self) -> AccessQueueLock<'_, T> {
+        AccessQueueLock {
+            lock: self.event.lock(),
+            queue: self,
+        }
+    }
+}
+
+pub struct AccessQueueLock<'a, T> {
+    queue: &'a AccessQueue<T>,
+    lock: EventLock<'a>,
+}
+
+impl<'a, T> AccessQueueLock<'a, T> {
+    #[allow(dead_code)]
+    pub fn block(&mut self, amt: usize) -> bool {
+        block(&self.queue.count, amt)
+    }
+
+    pub fn release(&mut self, amt: usize) {
+        self.queue.count.fetch_add(amt, SeqCst);
+        self.lock.notify(amt);
+    }
+
+    #[allow(dead_code)]
+    pub fn skip_queue(&self) -> &T {
+        self.queue.skip_queue()
     }
 }
 
@@ -123,4 +145,16 @@ impl<'a, T> Drop for AccessGuard<'a, T> {
     fn drop(&mut self) {
         self.queue.release(1);
     }
+}
+
+#[inline(always)]
+fn block(count: &AtomicUsize, amt: usize) -> bool {
+        let mut current = count.load(SeqCst);
+        while current >= amt {
+            match count.compare_exchange_weak(current, current - amt, SeqCst, SeqCst) {
+                Ok(_)   => return true,
+                Err(n)  => current = n,
+            }
+        }
+        false
 }

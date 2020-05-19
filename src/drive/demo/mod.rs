@@ -110,15 +110,15 @@ fn init() -> AccessQueue<Queues<'static>> {
 }
 
 unsafe fn complete(queues: &AccessQueue<Queues<'_>> ) {
-    let cq = &mut *queues.skip_queue().cq.get();
+    let cq: &mut iou::CompletionQueue<'_> = &mut *queues.skip_queue().cq.get();
     // TODO handle IO errors on completion returning
     while let Ok(cqe) = cq.wait_for_cqe() {
-        let mut n = 1;
+        let mut lock = queues.lock();
+        lock.release(1);
         super::complete(cqe);
         while let Some(cqe) = cq.peek_for_cqe() {
+            lock.release(1);
             super::complete(cqe);
-            n += 1;
         }
-        queues.release(n);
     }
 }
