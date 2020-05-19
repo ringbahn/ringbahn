@@ -1,5 +1,4 @@
 mod access_queue;
-mod waker_set;
 
 use std::cell::UnsafeCell;
 use std::future::Future;

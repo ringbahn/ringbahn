@@ -18,5 +18,9 @@ slab = "0.4.2"
 git = "https://github.com/withoutboats/iou"
 branch = "new-apis-needed-for-ringbahn"
 
+[dependencies.event-listener]
+git = "https://github.com/withoutboats/event-listener"
+branch = "event-lock"
+
 [dev-dependencies]
 futures = "0.3.5"

@@ -6,29 +6,28 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering::SeqCst;
 use std::task::{Context, Poll};
 
-use super::waker_set::WakerSet;
+use futures_core::ready;
+use event_listener::{Event, EventListener};
 
 pub struct AccessQueue<T> {
     count: AtomicUsize,
-    wakers: WakerSet,
+    event: Event,
     guarded: T,
 }
-
-const SENTINEL_KEY: usize = usize::MAX;
 
 impl<T> AccessQueue<T> {
     pub fn new(guarded: T, accesses: usize) -> AccessQueue<T> {
         AccessQueue {
             count: AtomicUsize::new(accesses),
-            wakers: WakerSet::new(),
+            event: Event::new(),
             guarded,
         }
     }
 
     pub fn enqueue(&self) -> WillAccess<'_, T> {
         WillAccess {
+            listener: None,
             queue: self,
-            key: SENTINEL_KEY,
         }
     }
 
@@ -62,17 +61,13 @@ impl<T> AccessQueue<T> {
     /// Release some number of accesses to the queue.
     pub fn release(&self, amt: usize) {
         self.count.fetch_add(amt, SeqCst);
-        self.wakers.notify(amt);
-    }
-
-    fn is_free(&self) -> bool {
-        self.count.load(SeqCst) > 0
+        self.event.notify(amt);
     }
 }
 
 pub struct WillAccess<'a, T> {
     queue: &'a AccessQueue<T>,
-    key: usize,
+    listener: Option<EventListener>,
 }
 
 impl<'a, T> WillAccess<'a, T> {
@@ -85,32 +80,25 @@ impl<'a, T> Future for WillAccess<'a, T> {
     type Output = AccessGuard<'a, T>;
 
     fn poll(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<AccessGuard<'a, T>> {
-        // Remove any previously registered waker from the queue
-        if self.key != SENTINEL_KEY {
-            self.queue.wakers.remove(self.key);
+        if let Some(listener) = &mut self.listener {
+            ready!(Pin::new(listener).poll(ctx));
+            self.listener = None;
         }
 
-        // Attempt to take 1 access to the queue; insert a waker in the queue if
-        // its not possible
         while !self.queue.block(1) {
-            self.key = self.queue.wakers.insert(ctx);
-
-            // If the queue still isn't free, return pending
-            if !self.queue.is_free() {
-                return Poll::Pending;
+            match &mut self.listener {
+                Some(listener)  => ready!(Pin::new(listener).poll(ctx)),
+                None            => {
+                    let mut listener = self.queue.event.listen();
+                    if let Poll::Pending = Pin::new(&mut listener).poll(ctx) {
+                        self.listener = Some(listener);
+                        return Poll::Pending
+                    }
+                }
             }
         }
 
         Poll::Ready(AccessGuard { queue: self.queue })
-    }
-}
-
-impl<'a, T> Drop for WillAccess<'a, T> {
-    fn drop(&mut self) {
-        // Cancel interest in access if this future is waiting on access
-        if self.key != SENTINEL_KEY {
-            self.queue.wakers.cancel(self.key);
-        }
     }
 }
 
