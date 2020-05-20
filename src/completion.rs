@@ -11,6 +11,9 @@ pub struct Completion {
     state: NonNull<Mutex<State>>,
 }
 
+unsafe impl Send for Completion { }
+unsafe impl Sync for Completion { }
+
 enum State {
     Submitted(Waker),
     Completed(i32),
