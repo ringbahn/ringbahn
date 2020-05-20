@@ -22,7 +22,7 @@ static SQ:   Lazy<Mutex<iou::SubmissionQueue<'static>>> = Lazy::new(init_sq);
 static LOCK: Lazy<AccessController>                     = Lazy::new(init_lock);
 
 pub struct DemoDriver<'a> {
-    sq: &'a Mutex<iou::SubmissionQueue<'static>>,
+    sq: &'a Lazy<Mutex<iou::SubmissionQueue<'static>>>,
     access: Access<'a>,
 }
 
