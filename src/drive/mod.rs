@@ -4,7 +4,6 @@ pub mod demo;
 
 use std::io;
 use std::pin::Pin;
-use std::ptr::NonNull;
 use std::task::{Context, Poll};
 
 pub use completion::{Completion, complete};
@@ -15,8 +14,8 @@ pub trait Drive {
     fn poll_prepare(
         self: Pin<&mut Self>,
         ctx: &mut Context<'_>,
-        prepare: impl FnOnce(iou::SubmissionQueueEvent<'_>, &mut Context<'_>) -> NonNull<Completion>,
-    ) -> Poll<NonNull<Completion>>;
+        prepare: impl FnOnce(iou::SubmissionQueueEvent<'_>, &mut Context<'_>) -> Completion,
+    ) -> Poll<Completion>;
 
     fn poll_submit(
         self: Pin<&mut Self>,

@@ -3,7 +3,6 @@ mod access_queue;
 use std::future::Future;
 use std::io;
 use std::pin::Pin;
-use std::ptr::NonNull;
 use std::task::{Poll, Context};
 use std::thread;
 
@@ -36,8 +35,8 @@ impl<'a> Drive for DemoDriver<'a> {
     fn poll_prepare(
         mut self: Pin<&mut Self>,
         ctx: &mut Context<'_>,
-        prepare: impl FnOnce(iou::SubmissionQueueEvent<'_>, &mut Context<'_>) -> NonNull<Completion>,
-    ) -> Poll<NonNull<Completion>> {
+        prepare: impl FnOnce(iou::SubmissionQueueEvent<'_>, &mut Context<'_>) -> Completion,
+    ) -> Poll<Completion> {
         ready!(Pin::new(&mut self.access).poll(ctx));
 
         let mut sq = self.sq.lock();
