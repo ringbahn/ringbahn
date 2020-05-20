@@ -32,11 +32,11 @@ impl Default for DemoDriver<'_> {
 }
 
 impl<'a> Drive for DemoDriver<'a> {
-    fn poll_prepare(
+    fn poll_prepare<'cx>(
         mut self: Pin<&mut Self>,
-        ctx: &mut Context<'_>,
-        prepare: impl FnOnce(iou::SubmissionQueueEvent<'_>, &mut Context<'_>) -> Completion,
-    ) -> Poll<Completion> {
+        ctx: &mut Context<'cx>,
+        prepare: impl FnOnce(iou::SubmissionQueueEvent<'_>, &mut Context<'cx>) -> Completion<'cx>,
+    ) -> Poll<Completion<'cx>> {
         ready!(Pin::new(&mut self.access).poll(ctx));
 
         let mut sq = self.sq.lock();

@@ -7,7 +7,8 @@ use std::task::{Context, Poll};
 use futures_core::ready;
 
 use crate::{Event, Drive};
-use crate::drive::Completion;
+use crate::completion::Completion;
+use crate::drive::Completion as ExternalCompletion;
 
 pub struct Submission<E: Event, D> {
     state: State,
@@ -45,7 +46,7 @@ impl<E: Event, D: Drive> Submission<E, D> {
             prepare(sqe, ctx, event, state)
         }));
         *state = State::Prepared;
-        this.completion = completion;
+        this.completion = completion.real;
         Poll::Ready(())
     }
 
@@ -143,12 +144,12 @@ impl<E: Event, D> Drop for Submission<E, D> {
 }
 
 #[inline(always)]
-unsafe fn prepare<E: Event>(
+unsafe fn prepare<'cx, E: Event>(
     sqe: iou::SubmissionQueueEvent<'_>,
-    ctx: &mut Context<'_>,
+    ctx: &mut Context<'cx>,
     event: &mut E,
     state: &mut State,
-) -> Completion {
+) -> ExternalCompletion<'cx> {
     // Use the SubmissionCleaner guard to clear the submission of any data
     // in case the Event::prepare method panics
     struct SubmissionCleaner<'a>(iou::SubmissionQueueEvent<'a>);
@@ -173,6 +174,6 @@ unsafe fn prepare<E: Event>(
     let completion = Completion::new(ctx.waker().clone());
     sqe.0.set_user_data(completion.addr());
     mem::forget(sqe);
-    completion
+    ExternalCompletion::new(completion, ctx)
 }
 
