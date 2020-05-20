@@ -134,7 +134,7 @@ impl<E, D> Future for Submission<E, D> where
 
 impl<E: Event, D> Drop for Submission<E, D> {
     fn drop(&mut self) {
-        if matches!(self.state, State::Prepared | State::Submitted | State::Lost) {
+        if matches!(self.state, State::Prepared | State::Submitted) {
             unsafe {
                 self.completion.cancel(Event::cancellation(&mut self.event));
             }
