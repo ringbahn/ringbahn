@@ -13,7 +13,7 @@ use crate::drive::Completion as ExternalCompletion;
 pub struct Submission<E: Event, D> {
     state: State,
     event: ManuallyDrop<E>,
-    driver: ManuallyDrop<D>,
+    driver: D,
     completion: Completion,
 }
 
@@ -31,15 +31,15 @@ impl<E: Event, D: Drive> Submission<E, D> {
         Submission {
             state: State::Waiting,
             event: ManuallyDrop::new(event),
-            driver: ManuallyDrop::new(driver),
             completion: Completion::dangling(),
+            driver,
         }
     }
 
     #[inline(always)]
     unsafe fn try_prepare(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<()> {
         let this = Pin::get_unchecked_mut(self);
-        let driver = Pin::new_unchecked(&mut *this.driver);
+        let driver = Pin::new_unchecked(&mut this.driver);
         let event = &mut *this.event;
         let state = &mut this.state;
         let completion = ready!(driver.poll_prepare(ctx, |sqe, ctx| {
@@ -65,7 +65,6 @@ impl<E: Event, D: Drive> Submission<E, D> {
         if let Some(result) = this.completion.check() {
             this.state = State::Complete;
             this.completion.deallocate();
-            ManuallyDrop::drop(&mut this.driver);
             let event = ManuallyDrop::take(&mut this.event);
             Poll::Ready((event, result))
         } else {
@@ -135,7 +134,7 @@ impl<E, D> Future for Submission<E, D> where
 
 impl<E: Event, D> Drop for Submission<E, D> {
     fn drop(&mut self) {
-        if matches!(self.state, State::Prepared | State::Submitted) {
+        if matches!(self.state, State::Prepared | State::Submitted | State::Lost) {
             unsafe {
                 self.completion.cancel(Event::cancellation(&mut self.event));
             }
