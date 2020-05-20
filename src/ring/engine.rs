@@ -139,7 +139,7 @@ impl Engine {
                     let data = self.write_buf.buf.as_mut_ptr();
                     let len = self.write_buf.buf.len();
                     self.completion.cancel(Cancellation::buffer(data, len));
-                    ptr::write(&mut self.read_buf, Buffer::new());
+                    ptr::write(&mut self.write_buf, Buffer::new());
                     self.state = Inert;
                 }
                 WriteBuffered                   => {
