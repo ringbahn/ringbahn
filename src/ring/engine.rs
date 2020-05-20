@@ -5,6 +5,7 @@ use std::io;
 use std::mem;
 use std::os::unix::io::RawFd;
 use std::pin::Pin;
+use std::ptr;
 use std::task::{Context, Poll};
 
 use crate::completion::Completion;
@@ -131,14 +132,14 @@ impl Engine {
                     let data = self.read_buf.buf.as_mut_ptr();
                     let len = self.read_buf.buf.len();
                     self.completion.cancel(Cancellation::buffer(data, len));
-                    self.read_buf = Buffer::new();
+                    ptr::write(&mut self.read_buf, Buffer::new());
                     self.state = Inert;
                 }
                 WritePrepared | WriteSubmitted  => {
                     let data = self.write_buf.buf.as_mut_ptr();
                     let len = self.write_buf.buf.len();
                     self.completion.cancel(Cancellation::buffer(data, len));
-                    self.write_buf = Buffer::new();
+                    ptr::write(&mut self.read_buf, Buffer::new());
                     self.state = Inert;
                 }
                 WriteBuffered                   => {
