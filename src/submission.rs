@@ -8,7 +8,7 @@ use std::task::{Context, Poll};
 use futures_core::ready;
 
 use crate::{Event, Drive};
-use crate::driver::Completion;
+use crate::drive::Completion;
 
 pub struct Submission<E: Event, D> {
     state: State,

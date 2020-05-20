@@ -8,11 +8,12 @@ use std::task::{Context, Poll};
 use futures_core::ready;
 use futures_io::{AsyncRead, AsyncBufRead, AsyncWrite};
 
-use crate::driver::{Drive, Driver};
+use crate::drive::Drive;
+use crate::drive::demo::DemoDriver;
 
 use engine::Engine;
 
-pub struct Ring<IO, D = &'static Driver> {
+pub struct Ring<IO, D = DemoDriver<'static>> {
     engine: Engine,
     io: IO,
     driver: D,
