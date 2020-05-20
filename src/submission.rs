@@ -2,7 +2,6 @@ use std::future::Future;
 use std::io;
 use std::mem::{self, ManuallyDrop};
 use std::pin::Pin;
-use std::ptr::NonNull;
 use std::task::{Context, Poll};
 
 use futures_core::ready;
@@ -14,7 +13,7 @@ pub struct Submission<E: Event, D> {
     state: State,
     event: ManuallyDrop<E>,
     driver: ManuallyDrop<D>,
-    completion: NonNull<Completion>,
+    completion: Completion,
 }
 
 #[derive(Copy, Clone, Eq, PartialEq)]
@@ -23,6 +22,7 @@ enum State {
     Prepared,
     Submitted,
     Complete,
+    Lost,
 }
 
 impl<E: Event, D: Drive> Submission<E, D> {
@@ -31,16 +31,20 @@ impl<E: Event, D: Drive> Submission<E, D> {
             state: State::Waiting,
             event: ManuallyDrop::new(event),
             driver: ManuallyDrop::new(driver),
-            completion: NonNull::dangling(),
+            completion: Completion::dangling(),
         }
     }
 
     #[inline(always)]
-    unsafe fn try_prepare(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<()> {
-        let (event, driver) = self.as_mut().event_and_driver();
-        let completion = ready!(driver.poll_prepare(ctx, |sqe, ctx| prepare(sqe, ctx, event)));
+    unsafe fn try_prepare(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<()> {
         let this = Pin::get_unchecked_mut(self);
-        this.state = State::Prepared;
+        let driver = Pin::new_unchecked(&mut *this.driver);
+        let event = &mut *this.event;
+        let state = &mut this.state;
+        let completion = ready!(driver.poll_prepare(ctx, |sqe, ctx| {
+            prepare(sqe, ctx, event, state)
+        }));
+        *state = State::Prepared;
         this.completion = completion;
         Poll::Ready(())
     }
@@ -57,14 +61,14 @@ impl<E: Event, D: Drive> Submission<E, D> {
     #[inline(always)]
     unsafe fn try_complete(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<(E, io::Result<usize>)> {
         let this = Pin::get_unchecked_mut(self);
-        if let Some(result) = this.completion.as_ref().check() {
+        if let Some(result) = this.completion.check() {
             this.state = State::Complete;
-            drop(Box::<Completion>::from_raw(this.completion.as_ptr()));
+            this.completion.deallocate();
             ManuallyDrop::drop(&mut this.driver);
             let event = ManuallyDrop::take(&mut this.event);
             Poll::Ready((event, result))
         } else {
-            this.completion.as_ref().set_waker(ctx.waker().clone());
+            this.completion.set_waker(ctx.waker().clone());
             Poll::Pending
         }
     }
@@ -115,7 +119,13 @@ impl<E, D> Future for Submission<E, D> where
 
                 // If the event is completed, this future has been called after
                 // returning ready.
-                State::Complete    => panic!("Submission future polled after completion finished"),
+                State::Complete     => panic!("Submission future polled after completion finished"),
+
+                // The "Lost" state indicates that the event was prepared, but
+                // its completion was not saved. This can only occur when the
+                // driver is incorrectly implemented: preparing a completion
+                // but then not returning it to us.
+                State::Lost         => panic!("Submission future in a bad state; driver is faulty"),
             }
         }
     }
@@ -126,7 +136,7 @@ impl<E: Event, D> Drop for Submission<E, D> {
     fn drop(&mut self) {
         if matches!(self.state, State::Prepared | State::Submitted) {
             unsafe {
-                self.completion.as_ref().cancel(Event::cancellation(&mut self.event));
+                self.completion.cancel(Event::cancellation(&mut self.event));
             }
         }
     }
@@ -137,7 +147,8 @@ unsafe fn prepare<E: Event>(
     sqe: iou::SubmissionQueueEvent<'_>,
     ctx: &mut Context<'_>,
     event: &mut E,
-) -> NonNull<Completion> {
+    state: &mut State,
+) -> Completion {
     // Use the SubmissionCleaner guard to clear the submission of any data
     // in case the Event::prepare method panics
     struct SubmissionCleaner<'a>(iou::SubmissionQueueEvent<'a>);
@@ -153,10 +164,14 @@ unsafe fn prepare<E: Event>(
 
     let mut sqe = SubmissionCleaner(sqe);
     event.prepare(&mut sqe.0);
+    
+    // NB: State is put into the `Lost` state in case the driver fails to fulfill its side of the
+    // contract and return the Completion back to us. In the Lost state, future attempts to poll
+    // the submission will panic.
+    *state = State::Lost;
 
-    let completion = Box::new(Completion::new(ctx.waker().clone()));
-    let completion = NonNull::new_unchecked(Box::into_raw(completion));
-    sqe.0.set_user_data(completion.as_ptr() as usize as u64);
+    let completion = Completion::new(ctx.waker().clone());
+    sqe.0.set_user_data(completion.addr());
     mem::forget(sqe);
     completion
 }

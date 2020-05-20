@@ -5,7 +5,6 @@ use std::io;
 use std::mem;
 use std::os::unix::io::RawFd;
 use std::pin::Pin;
-use std::ptr::NonNull;
 use std::task::{Context, Poll};
 
 use crate::event::Cancellation;
@@ -17,7 +16,7 @@ pub struct Engine {
     state: State,
     read_buf: Buffer,
     write_buf: Buffer,
-    completion: NonNull<Completion>,
+    completion: Completion,
 }
 
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
@@ -28,6 +27,7 @@ enum State {
     WriteBuffered,
     WritePrepared,
     WriteSubmitted,
+    Lost,
 }
 
 impl Engine {
@@ -36,7 +36,7 @@ impl Engine {
             state: Inert,
             read_buf: Buffer::new(),
             write_buf: Buffer::new(),
-            completion: NonNull::dangling(),
+            completion: Completion::dangling(),
         }
     }
 
@@ -102,6 +102,7 @@ impl Engine {
                         }
                     }
                 }
+                Lost            => panic!("Ring in a bad state; driver is faulty"),
                 _               => {
                     if !matches!(self.state, WriteBuffered) {
                         self.cancel();
@@ -109,7 +110,7 @@ impl Engine {
                         self.state = WriteBuffered;
                     }
                     self.completion = ready!(driver.as_mut().poll_prepare(ctx, |sqe, ctx| {
-                        prepare_write(sqe, ctx, fd, &mut self.write_buf.active())
+                        prepare_write(sqe, ctx, fd, &mut self.write_buf.active(), &mut self.state)
                     }));
                     self.state = WritePrepared;
                     ready!(self.try_submit(ctx, driver));
@@ -128,14 +129,14 @@ impl Engine {
                 ReadPrepared | ReadSubmitted    => {
                     let data = self.read_buf.buf.as_mut_ptr();
                     let len = self.read_buf.buf.len();
-                    self.completion.as_ref().cancel(Cancellation::buffer(data, len));
+                    self.completion.cancel(Cancellation::buffer(data, len));
                     self.read_buf = Buffer::new();
                     self.state = Inert;
                 }
                 WritePrepared | WriteSubmitted  => {
                     let data = self.write_buf.buf.as_mut_ptr();
                     let len = self.write_buf.buf.len();
-                    self.completion.as_ref().cancel(Cancellation::buffer(data, len));
+                    self.completion.cancel(Cancellation::buffer(data, len));
                     self.write_buf = Buffer::new();
                     self.state = Inert;
                 }
@@ -144,7 +145,7 @@ impl Engine {
                     self.write_buf.cap = 0;
                     self.state = Inert;
                 }
-                Inert                           => { }
+                Inert | Lost                    => { }
             }
         }
     }
@@ -169,10 +170,11 @@ impl Engine {
                         }
                     }
                 }
+                Lost            => panic!("Ring in a bad state; driver is faulty"),
                 _ => {
                     self.cancel();
                     self.completion = ready!(driver.as_mut().poll_prepare(ctx, |sqe, ctx| {
-                        prepare_read(sqe, ctx, fd, &mut self.read_buf.buf[..])
+                        prepare_read(sqe, ctx, fd, &mut self.read_buf.buf[..], &mut self.state)
                     }));
                     self.state = ReadPrepared;
                     ready!(self.try_submit(ctx, driver));
@@ -194,12 +196,12 @@ impl Engine {
 
     #[inline(always)]
     unsafe fn try_complete(&mut self, ctx: &mut Context<'_>) -> Poll<io::Result<usize>> {
-        if let Some(result) = self.completion.as_ref().check() {
+        if let Some(result) = self.completion.check() {
             self.state = Inert;
-            drop(Box::<Completion>::from_raw(self.completion.as_ptr()));
+            self.completion.deallocate();
             Poll::Ready(result)
         } else {
-            self.completion.as_ref().set_waker(ctx.waker().clone());
+            self.completion.set_waker(ctx.waker().clone());
             Poll::Pending
         }
     }
@@ -217,13 +219,14 @@ unsafe fn prepare_read(
     ctx: &mut Context<'_>, 
     fd: RawFd,
     buf: &mut [u8],
-) -> NonNull<Completion> {
+    state: &mut State,
+) -> Completion {
     let mut sqe = SubmissionCleaner(sqe);
     sqe.0.prep_read(fd, buf, 0);
 
-    let completion = Box::new(Completion::new(ctx.waker().clone()));
-    let completion = NonNull::new_unchecked(Box::into_raw(completion));
-    sqe.0.set_user_data(completion.as_ptr() as usize as u64);
+    let completion = Completion::new(ctx.waker().clone());
+    sqe.0.set_user_data(completion.addr());
+    *state = Lost;
     mem::forget(sqe);
     completion
 }
@@ -233,13 +236,14 @@ unsafe fn prepare_write(
     ctx: &mut Context<'_>, 
     fd: RawFd,
     buf: &[u8],
-) -> NonNull<Completion> {
+    state: &mut State,
+) -> Completion {
     let mut sqe = SubmissionCleaner(sqe);
     sqe.0.prep_write(fd, buf, 0);
 
-    let completion = Box::new(Completion::new(ctx.waker().clone()));
-    let completion = NonNull::new_unchecked(Box::into_raw(completion));
-    sqe.0.set_user_data(completion.as_ptr() as usize as u64);
+    let completion = Completion::new(ctx.waker().clone());
+    sqe.0.set_user_data(completion.addr());
+    *state = Lost;
     mem::forget(sqe);
     completion
 }

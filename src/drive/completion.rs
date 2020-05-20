@@ -1,6 +1,6 @@
 use std::io;
 use std::mem;
-use std::ptr;
+use std::ptr::{self, NonNull};
 use std::task::Waker;
 
 use parking_lot::Mutex;
@@ -8,7 +8,7 @@ use parking_lot::Mutex;
 use crate::event::Cancellation;
 
 pub struct Completion {
-    state: Mutex<State>,
+    state: NonNull<Mutex<State>>,
 }
 
 enum State {
@@ -19,32 +19,47 @@ enum State {
 
 impl Completion {
     pub(crate) fn new(waker: Waker) -> Completion {
-        Completion {
-            state: Mutex::new(State::Submitted(waker)),
+        unsafe {
+            let state = Box::new(Mutex::new(State::Submitted(waker)));
+            Completion {
+                state: NonNull::new_unchecked(Box::into_raw(state)),
+            }
         }
     }
 
-    pub(crate) fn set_waker(&self, waker: Waker) {
-        let mut state = self.state.lock();
+    pub(crate) fn dangling() -> Completion {
+        Completion {
+            state: NonNull::dangling(),
+        }
+    }
+
+    pub(crate) unsafe fn deallocate(&self) {
+        drop(Box::from_raw(self.state.as_ptr()));
+    }
+
+    pub(crate) fn addr(&self) -> u64 {
+        self.state.as_ptr() as usize as u64
+    }
+
+    pub(crate) unsafe fn set_waker(&self, waker: Waker) {
+        let mut state = self.state.as_ref().lock();
         if let State::Submitted(slot) = &mut *state {
             *slot = waker;
         }
     }
 
-    pub(crate) fn cancel(&self, mut callback: Cancellation) {
-        unsafe {
-            let mut state = self.state.lock();
-            if matches!(&*state, State::Completed(_)) {
-                drop(Box::from_raw(self as *const Completion as *mut Completion));
-                callback.cancel();
-            } else {
-                *state = State::Cancelled(callback);
-            }
+    pub(crate) unsafe fn cancel(&self, mut callback: Cancellation) {
+        let mut state = self.state.as_ref().lock();
+        if matches!(&*state, State::Completed(_)) {
+            self.deallocate();
+            callback.cancel();
+        } else {
+            *state = State::Cancelled(callback);
         }
     }
 
-    pub(crate) fn check(&self) -> Option<io::Result<usize>> {
-        let state = self.state.lock();
+    pub(crate) unsafe fn check(&self) -> Option<io::Result<usize>> {
+        let state = self.state.as_ref().lock();
         match *state {
             State::Completed(result)    => {
                 match result >= 0 {
@@ -60,10 +75,10 @@ impl Completion {
 pub unsafe fn complete(cqe: iou::CompletionQueueEvent) {
     if cqe.is_timeout() { return; }
 
-    let completion = cqe.user_data() as *mut Completion;
+    let completion = cqe.user_data() as *mut Mutex<State>;
 
     if completion != ptr::null_mut() {
-        let mut state = (*completion).state.lock();
+        let mut state = (*completion).lock();
         match mem::replace(&mut *state, State::Completed(cqe.raw_result())) {
             State::Submitted(waker)         => waker.wake(),
             State::Cancelled(mut callback)  => {
