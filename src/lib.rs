@@ -3,6 +3,7 @@ pub mod event;
 
 mod ring;
 mod submission;
+mod completion;
 
 pub use submission::Submission;
 

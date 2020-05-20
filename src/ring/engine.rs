@@ -7,8 +7,9 @@ use std::os::unix::io::RawFd;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
+use crate::completion::Completion;
 use crate::event::Cancellation;
-use crate::drive::{Drive, Completion};
+use crate::drive::{Drive, Completion as ExternalCompletion};
 
 use State::*;
 
@@ -111,7 +112,7 @@ impl Engine {
                     }
                     self.completion = ready!(driver.as_mut().poll_prepare(ctx, |sqe, ctx| {
                         prepare_write(sqe, ctx, fd, &mut self.write_buf.active(), &mut self.state)
-                    }));
+                    })).real;
                     self.state = WritePrepared;
                     ready!(self.try_submit(ctx, driver));
                     self.state = WriteSubmitted;
@@ -175,7 +176,7 @@ impl Engine {
                     self.cancel();
                     self.completion = ready!(driver.as_mut().poll_prepare(ctx, |sqe, ctx| {
                         prepare_read(sqe, ctx, fd, &mut self.read_buf.buf[..], &mut self.state)
-                    }));
+                    })).real;
                     self.state = ReadPrepared;
                     ready!(self.try_submit(ctx, driver));
                     self.state = ReadSubmitted;
@@ -214,13 +215,13 @@ impl Drop for Engine {
     }
 }
 
-unsafe fn prepare_read(
+unsafe fn prepare_read<'cx>(
     sqe: iou::SubmissionQueueEvent<'_>,
-    ctx: &mut Context<'_>, 
+    ctx: &mut Context<'cx>, 
     fd: RawFd,
     buf: &mut [u8],
     state: &mut State,
-) -> Completion {
+) -> ExternalCompletion<'cx> {
     let mut sqe = SubmissionCleaner(sqe);
     sqe.0.prep_read(fd, buf, 0);
 
@@ -228,16 +229,16 @@ unsafe fn prepare_read(
     sqe.0.set_user_data(completion.addr());
     *state = Lost;
     mem::forget(sqe);
-    completion
+    ExternalCompletion::new(completion, ctx)
 }
 
-unsafe fn prepare_write(
+unsafe fn prepare_write<'cx>(
     sqe: iou::SubmissionQueueEvent<'_>,
-    ctx: &mut Context<'_>, 
+    ctx: &mut Context<'cx>, 
     fd: RawFd,
     buf: &[u8],
     state: &mut State,
-) -> Completion {
+) -> ExternalCompletion<'cx> {
     let mut sqe = SubmissionCleaner(sqe);
     sqe.0.prep_write(fd, buf, 0);
 
@@ -245,7 +246,7 @@ unsafe fn prepare_write(
     sqe.0.set_user_data(completion.addr());
     *state = Lost;
     mem::forget(sqe);
-    completion
+    ExternalCompletion::new(completion, ctx)
 }
 
 // Use the SubmissionCleaner guard to clear the submission of any data
