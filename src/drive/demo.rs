@@ -1,7 +1,5 @@
 //! A demo driver for experimentation purposes
 
-mod access_queue;
-
 use std::future::Future;
 use std::io;
 use std::pin::Pin;
@@ -19,13 +17,11 @@ use access_queue::*;
 
 use super::{Drive, Completion};
 
-static SQ:   Lazy<Mutex<iou::SubmissionQueue<'static>>> = Lazy::new(init_sq);
-static LOCK: Lazy<AccessController>                     = Lazy::new(init_lock);
+static SQ: Lazy<AccessQueue<Mutex<iou::SubmissionQueue<'static>>>> = Lazy::new(init_sq);
 
 /// The driver handle
 pub struct DemoDriver<'a> {
-    sq: &'a Mutex<iou::SubmissionQueue<'static>>,
-    access: Access<'a>,
+    sq: Access<'a, Mutex<iou::SubmissionQueue<'static>>>,
 }
 
 impl Default for DemoDriver<'_> {
@@ -40,9 +36,7 @@ impl Drive for DemoDriver<'_> {
         ctx: &mut Context<'cx>,
         prepare: impl FnOnce(iou::SubmissionQueueEvent<'_>, &mut Context<'cx>) -> Completion<'cx>,
     ) -> Poll<Completion<'cx>> {
-        ready!(Pin::new(&mut self.access).poll(ctx));
-
-        let mut sq = self.sq.lock();
+        let mut sq = ready!(Pin::new(&mut self.sq).poll(ctx)).hold_indefinitely().lock();
         loop {
             match sq.next_sqe() {
                 Some(sqe)   => return Poll::Ready(prepare(sqe, ctx)),
@@ -57,7 +51,7 @@ impl Drive for DemoDriver<'_> {
         eager: bool,
     ) -> Poll<io::Result<usize>> {
         let result = if eager {
-            self.sq.lock().submit()
+            self.sq.skip_queue().lock().submit()
         } else {
             Ok(0)
         };
@@ -67,29 +61,22 @@ impl Drive for DemoDriver<'_> {
 
 /// Construct a demo driver handle
 pub fn driver() -> DemoDriver<'static> {
-    DemoDriver {
-        sq: &SQ,
-        access: LOCK.access(),
-    }
+    DemoDriver { sq: SQ.access() }
 }
 
-fn init_sq() -> Mutex<iou::SubmissionQueue<'static>> {
+fn init_sq() -> AccessQueue<Mutex<iou::SubmissionQueue<'static>>> {
     unsafe {
         static mut RING: Option<iou::IoUring> = None;
         RING = Some(iou::IoUring::new(SQ_ENTRIES).expect("TODO handle io_uring_init failure"));
         let (sq, cq, _) = RING.as_mut().unwrap().queues();
         thread::spawn(move || complete(cq));
-        Mutex::new(sq)
+        AccessQueue::new(Mutex::new(sq), CQ_ENTRIES)
     }
-}
-
-fn init_lock() -> AccessController {
-    AccessController::new(CQ_ENTRIES)
 }
 
 unsafe fn complete(mut cq: iou::CompletionQueue<'static>) {
     while let Ok(cqe) = cq.wait_for_cqe() {
-        LOCK.release(cq.ready() as usize + 1);
+        SQ.release(cq.ready() as usize + 1);
         super::complete(cqe);
         while let Some(cqe) = cq.peek_for_cqe() {
             super::complete(cqe);
