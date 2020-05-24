@@ -16,8 +16,8 @@ futures-core = "0.3.5"
 git = "https://github.com/withoutboats/iou"
 branch = "new-apis-needed-for-ringbahn"
 
-[dependencies.event-listener]
-git = "https://github.com/stjepang/event-listener"
+[dependencies.access-queue]
+git = "https://github.com/withoutboats/access-queue"
 
 [dev-dependencies]
 futures = "0.3.5"
