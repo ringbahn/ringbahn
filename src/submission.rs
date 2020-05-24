@@ -10,6 +10,7 @@ use crate::{Event, Drive};
 use crate::completion::Completion;
 use crate::drive::Completion as ExternalCompletion;
 
+/// A [`Future`] representing an event submitted to io-uring
 pub struct Submission<E: Event, D> {
     state: State,
     event: ManuallyDrop<E>,
@@ -27,6 +28,7 @@ enum State {
 }
 
 impl<E: Event, D: Drive> Submission<E, D> {
+    /// Construct a new submission from an event and a driver.
     pub fn new(event: E, driver: D) -> Submission<E, D> {
         Submission {
             state: State::Waiting,

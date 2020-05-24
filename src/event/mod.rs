@@ -1,3 +1,4 @@
+//! Events that can be scheduled on io-uring with a [`Submission`]
 mod cancellation;
 
 mod read;
@@ -6,13 +7,12 @@ mod write;
 use std::marker::Unpin;
 use std::mem::ManuallyDrop;
 
-use crate::{Submission, Drive};
-
 pub use cancellation::Cancellation;
 
 pub use read::Read;
 pub use write::Write;
 
+/// An IO event that can be scheduled on an io-uring driver.
 pub trait Event: Unpin {
     /// Prepare an event to be submitted using this SQE
     ///
@@ -43,10 +43,7 @@ pub trait Event: Unpin {
     /// can be cleaned up once the kernel no longer needs them.
     fn cancellation(this: &mut ManuallyDrop<Self>) -> Cancellation;
 
-    fn submit<D: Drive>(self, driver: D) -> Submission<Self, D> where Self: Sized {
-        Submission::new(self, driver)
-    }
-
+    /// Hint if this event is eager.
     fn is_eager(&self) -> bool {
         true
     }

@@ -13,6 +13,14 @@ use crate::drive::demo::DemoDriver;
 
 use engine::Engine;
 
+/// A wrapper that runs a handle's IO on io-uring.
+///
+/// Takes any object that implements AsRawFd and runs the IO for that object on io-uring, instead
+/// of using blocking interfaces. Ring implements [`AsyncRead`], [`AsyncWrite`], and
+/// [`AsyncBufRead`].
+///
+/// Note that using `AsyncBufRead` interfaces instead of `AsyncRead` will likely be more
+/// performant, if possible.
 pub struct Ring<IO, D = DemoDriver<'static>> {
     engine: Engine,
     io: IO,
@@ -20,12 +28,14 @@ pub struct Ring<IO, D = DemoDriver<'static>> {
 }
 
 impl<IO: AsRawFd, D: Drive + Default> Ring<IO, D> {
+    /// Construct a new Ring on the default driver
     pub fn new(io: IO) -> Ring<IO, D> {
         Ring::on_driver(io, D::default())
     }
 }
 
 impl<IO: AsRawFd, D: Drive> Ring<IO, D> {
+    /// Construct a new Ring on a driver of your choice
     pub fn on_driver(io: IO, driver: D) -> Ring<IO, D> {
         let engine = Engine::new();
         Ring { engine, io, driver }

@@ -1,3 +1,5 @@
+//! A demo driver for experimentation purposes
+
 mod access_queue;
 
 use std::future::Future;
@@ -20,8 +22,9 @@ use super::{Drive, Completion};
 static SQ:   Lazy<Mutex<iou::SubmissionQueue<'static>>> = Lazy::new(init_sq);
 static LOCK: Lazy<AccessController>                     = Lazy::new(init_lock);
 
+/// The driver handle
 pub struct DemoDriver<'a> {
-    sq: &'a Lazy<Mutex<iou::SubmissionQueue<'static>>>,
+    sq: &'a Mutex<iou::SubmissionQueue<'static>>,
     access: Access<'a>,
 }
 
@@ -31,7 +34,7 @@ impl Default for DemoDriver<'_> {
     }
 }
 
-impl<'a> Drive for DemoDriver<'a> {
+impl Drive for DemoDriver<'_> {
     fn poll_prepare<'cx>(
         mut self: Pin<&mut Self>,
         ctx: &mut Context<'cx>,
@@ -62,6 +65,7 @@ impl<'a> Drive for DemoDriver<'a> {
     }
 }
 
+/// Construct a demo driver handle
 pub fn driver() -> DemoDriver<'static> {
     DemoDriver {
         sq: &SQ,

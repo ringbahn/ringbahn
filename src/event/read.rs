@@ -4,6 +4,7 @@ use std::marker::Unpin;
 
 use super::{Event, Cancellation};
 
+/// A basic read event.
 pub struct Read<'a, T> {
     pub io: &'a mut T,
     pub buf: Vec<u8>,
