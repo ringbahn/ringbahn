@@ -75,6 +75,17 @@ impl Completion {
     }
 }
 
+/// Complete an `[iou::CompletionQueueEvent]` which was constructed from a [`Completion`].
+///
+/// This function should be used in combination with a driver that implements [`Drive`] to process
+/// events on an io-uring instance. This function takes a CQE and processes it.
+///
+/// ## Safety
+///
+/// This function is only valid if the user_data in the CQE is null, the liburing timeout
+/// signifier, or a pointer to a Completion constructed using ringbahn. If you have scheduled any
+/// events on the io-uring instance using a library other than ringbahn, this method is not safe to
+/// call unless you have filtered those events out in some manner.
 pub unsafe fn complete(cqe: iou::CompletionQueueEvent) {
     if cqe.is_timeout() { return; }
 

@@ -1,5 +1,9 @@
 use std::ptr;
 
+/// A cancellation callback when IO gets cancelled.
+///
+/// When an event waiting to complete on io-uring gets cancelled, a cancellation is constructed to
+/// clean up the resources that event was using, after it completes.
 pub struct Cancellation {
     data: *mut (),
     metadata: usize,
