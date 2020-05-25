@@ -7,6 +7,7 @@ license = "MIT OR Apache-2.0"
 edition = "2018"
 
 [dependencies]
+access-queue = "1.1.0"
 parking_lot = "0.10.2"
 once_cell = "1.3.1"
 futures-io = "0.3.5"
@@ -15,10 +16,6 @@ futures-core = "0.3.5"
 [dependencies.iou]
 git = "https://github.com/withoutboats/iou"
 branch = "new-apis-needed-for-ringbahn"
-
-[dependencies.access-queue]
-git = "https://github.com/withoutboats/access-queue"
-branch = "reenqueue"
 
 [dev-dependencies]
 futures = "0.3.5"
