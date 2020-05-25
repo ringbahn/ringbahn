@@ -36,7 +36,14 @@ impl Drive for DemoDriver<'_> {
         ctx: &mut Context<'cx>,
         prepare: impl FnOnce(iou::SubmissionQueueEvent<'_>, &mut Context<'cx>) -> Completion<'cx>,
     ) -> Poll<Completion<'cx>> {
-        let mut sq = ready!(Pin::new(&mut self.sq).poll(ctx)).hold_indefinitely().lock();
+        // Wait for access to prepare. When ready, create a new Access future to wait next time we
+        // want to prepare with this driver, and lock the SQ.
+        //
+        // TODO likely we should be using a nonblocking mutex?
+        let access = ready!(Pin::new(&mut self.sq).poll(ctx));
+        let (sq, access) = access.hold_and_reenqueue();
+        self.sq = access;
+        let mut sq = sq.lock();
         loop {
             match sq.next_sqe() {
                 Some(sqe)   => return Poll::Ready(prepare(sqe, ctx)),
