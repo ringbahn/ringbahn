@@ -1,21 +1,19 @@
 [package]
 name = "ringbahn"
-version = "0.1.0"
+version = "0.0.0-experimental"
 authors = ["Without Boats <woboats@gmail.com>"]
+description = "an experimental safe API for io-uring"
 repository = "https://github.com/withoutboats/ringbahn"
 license = "MIT OR Apache-2.0"
 edition = "2018"
 
 [dependencies]
 access-queue = "1.1.0"
-parking_lot = "0.10.2"
-once_cell = "1.3.1"
 futures-io = "0.3.5"
 futures-core = "0.3.5"
-
-[dependencies.iou]
-git = "https://github.com/withoutboats/iou"
-branch = "new-apis-needed-for-ringbahn"
+iou = "0.0.0-ringbahn"
+parking_lot = "0.10.2"
+once_cell = "1.3.1"
 
 [dev-dependencies]
 futures = "0.3.5"
