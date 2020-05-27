@@ -1,6 +1,6 @@
 [package]
 name = "ringbahn"
-version = "0.0.0-experimental"
+version = "0.0.0-experimental.1"
 authors = ["Without Boats <woboats@gmail.com>"]
 description = "an experimental safe API for io-uring"
 repository = "https://github.com/withoutboats/ringbahn"
@@ -11,7 +11,7 @@ edition = "2018"
 access-queue = "1.1.0"
 futures-io = "0.3.5"
 futures-core = "0.3.5"
-iou = "0.0.0-ringbahn"
+iou = "0.0.0-ringbahn.1"
 parking_lot = "0.10.2"
 once_cell = "1.3.1"
 
