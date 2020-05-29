@@ -45,6 +45,10 @@ impl<IO: AsRawFd, D: Drive> Ring<IO, D> {
     pub fn cancel(&mut self) {
         self.engine.cancel();
     }
+
+    pub fn blocking(&mut self) -> &mut IO {
+        &mut self.io
+    }
 }
 
 impl<IO, D> Ring<IO, D> {
