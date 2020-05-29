@@ -8,7 +8,7 @@ use ringbahn::Ring;
 const ASSERT: &[u8] = b"But this formidable power of death -";
 
 #[test]
-fn read_file() {
+fn write_file() {
     let file = tempfile::tempfile().unwrap();
     let mut file: Ring<File> = Ring::new(file);
     futures::executor::block_on(async move {
