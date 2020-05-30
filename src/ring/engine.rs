@@ -193,7 +193,7 @@ impl Engine {
     {
         // TODO figure out how to handle this result
         let _ = ready!(driver.poll_submit(ctx, true));
-        Poll::Pending
+        Poll::Ready(())
     }
 
     #[inline(always)]

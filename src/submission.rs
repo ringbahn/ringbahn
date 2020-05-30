@@ -58,7 +58,7 @@ impl<E: Event, D: Drive> Submission<E, D> {
         // TODO figure out how to handle this result
         let _ = ready!(driver.poll_submit(ctx, event.is_eager()));
         Pin::get_unchecked_mut(self).state = State::Submitted;
-        Poll::Pending
+        Poll::Ready(())
     }
 
     #[inline(always)]
