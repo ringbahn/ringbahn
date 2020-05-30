@@ -54,8 +54,9 @@ impl Completion {
     pub(crate) unsafe fn cancel(&self, mut callback: Cancellation) {
         let mut state = self.state.as_ref().lock();
         if matches!(&*state, State::Completed(_)) {
-            self.deallocate();
+            drop(state);
             callback.cancel();
+            self.deallocate();
         } else {
             *state = State::Cancelled(callback);
         }
@@ -96,6 +97,7 @@ pub unsafe fn complete(cqe: iou::CompletionQueueEvent) {
         match mem::replace(&mut *state, State::Completed(cqe.raw_result())) {
             State::Submitted(waker)         => waker.wake(),
             State::Cancelled(mut callback)  => {
+                drop(state);
                 drop(Box::from_raw(completion));
                 callback.cancel();
             }
