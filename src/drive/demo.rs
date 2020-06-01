@@ -83,10 +83,22 @@ fn init_sq() -> AccessQueue<Mutex<iou::SubmissionQueue<'static>>> {
 
 unsafe fn complete(mut cq: iou::CompletionQueue<'static>) {
     while let Ok(cqe) = cq.wait_for_cqe() {
-        SQ.release(cq.ready() as usize + 1);
+        let mut ready = cq.ready() as usize + 1;
+        SQ.release(ready);
+
         super::complete(cqe);
+        ready -= 1;
+
         while let Some(cqe) = cq.peek_for_cqe() {
+            if ready == 0 {
+                ready = cq.ready() as usize + 1;
+                SQ.release(ready);
+            }
+
             super::complete(cqe);
+            ready -= 1;
         }
+
+        debug_assert!(ready == 0);
     }
 }
