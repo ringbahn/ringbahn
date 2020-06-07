@@ -11,11 +11,14 @@ edition = "2018"
 access-queue = "1.1.0"
 futures-io = "0.3.5"
 futures-core = "0.3.5"
-iou = { path = "../iou" }
 parking_lot = "0.10.2"
 once_cell = "1.3.1"
 libc = "0.2.71"
 uring-sys = "0.6.1"
+
+[dependencies.iou]
+git = "https://github.com/withoutboats/iou"
+branch = "new-apis-needed-for-ringbahn"
 
 [dev-dependencies]
 tempfile = "3.1.0"
