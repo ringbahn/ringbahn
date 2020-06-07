@@ -25,6 +25,7 @@ pub struct Ring<IO: AsRawFd, D: Drive = DemoDriver<'static>> {
     io: ManuallyDrop<IO>,
     completion: Option<Completion>,
     buf: Buffer,
+    pos: usize,
     driver: D,
 }
 
@@ -58,6 +59,7 @@ impl<IO: AsRawFd, D: Drive> Ring<IO, D> {
             io: ManuallyDrop::new(io),
             buf: Buffer::new(),
             completion: None,
+            pos: 0,
             driver,
         }
     }
@@ -78,16 +80,22 @@ impl<IO: AsRawFd, D: Drive> Ring<IO, D> {
         &mut *self.io
     }
 
-    unsafe fn poll_read_op(self: Pin<&mut Self>, c: &mut Context<'_>) -> Poll<io::Result<usize>> {
-        self.poll(c, |sqe, fd, buf| sqe.prep_read(fd, buf.read_buf(), 0))
+    unsafe fn poll_read_op(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<io::Result<usize>> {
+        let pos = self.pos;
+        let n = ready!(self.as_mut().poll(ctx, |sqe, fd, buf| sqe.prep_read(fd, buf.read_buf(), pos)))?;
+        *self.pos() += n;
+        Poll::Ready(Ok(n))
     }
 
-    unsafe fn poll_write_op(self: Pin<&mut Self>, c: &mut Context<'_>) -> Poll<io::Result<usize>> {
-        self.poll(c, |sqe, fd, buf| sqe.prep_write(fd, buf.write_buf(), 0))
+    unsafe fn poll_write_op(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<io::Result<usize>> {
+        let pos = self.pos;
+        let n = ready!(self.as_mut().poll(ctx, |sqe, fd, buf| sqe.prep_write(fd, buf.write_buf(), pos)))?;
+        *self.pos() += n;
+        Poll::Ready(Ok(n))
     }
 
-    unsafe fn poll_close_op(self: Pin<&mut Self>, c: &mut Context<'_>) -> Poll<io::Result<usize>> {
-        self.poll(c, |sqe, fd, _| sqe.prep_close(fd))
+    unsafe fn poll_close_op(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<io::Result<usize>> {
+        self.poll(ctx, |sqe, fd, _| sqe.prep_close(fd))
     }
 
     #[inline]
@@ -202,6 +210,11 @@ impl<IO: AsRawFd, D: Drive> Ring<IO, D> {
     fn buf(self: Pin<&mut Self>) -> Pin<&mut Buffer> {
         unsafe { Pin::map_unchecked_mut(self, |this| &mut this.buf) }
     }
+
+    #[inline]
+    fn pos(self: Pin<&mut Self>) -> Pin<&mut usize> {
+        unsafe { Pin::map_unchecked_mut(self, |this| &mut this.pos) }
+    }
 }
 
 impl<IO: io::Read  + AsRawFd, D: Drive> AsyncRead for Ring<IO, D> {
@@ -231,7 +244,8 @@ impl<IO: io::Read  + AsRawFd, D: Drive> AsyncBufRead for Ring<IO, D> {
             }
             let consumed = this.buf.consumed as usize;
             let read = this.buf.read as usize;
-            Poll::Ready(Ok(&this.buf.data()[consumed..read]))
+            let slice = &this.buf.data()[consumed..read];
+            Poll::Ready(Ok(slice))
         }
     }
 
