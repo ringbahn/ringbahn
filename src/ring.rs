@@ -19,7 +19,7 @@ use crate::event::Cancellation;
 
 use State::*;
 
-pub struct Ring<IO: AsRawFd, D: Drive = DemoDriver<'static>> {
+pub struct Ring<IO: RunOnRing, D: Drive = DemoDriver<'static>> {
     state: State,
     current: Current,
     io: ManuallyDrop<IO>,
@@ -45,13 +45,13 @@ enum Current {
     Close,
 }
 
-impl<IO: AsRawFd> Ring<IO> {
+impl<IO: RunOnRing> Ring<IO> {
     pub fn new(io: IO) -> Ring<IO> {
         Ring::on_driver(io, DemoDriver::default())
     }
 }
 
-impl<IO: AsRawFd, D: Drive> Ring<IO, D> {
+impl<IO: RunOnRing, D: Drive> Ring<IO, D> {
     pub fn on_driver(io: IO, driver: D) -> Ring<IO, D> {
         Ring {
             state: Inert,
@@ -81,14 +81,14 @@ impl<IO: AsRawFd, D: Drive> Ring<IO, D> {
     }
 
     unsafe fn poll_read_op(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<io::Result<usize>> {
-        let pos = self.pos;
+        let pos = IO::adjust_offset(self.pos);
         let n = ready!(self.as_mut().poll(ctx, |sqe, fd, buf| sqe.prep_read(fd, buf.read_buf(), pos)))?;
         *self.pos() += n;
         Poll::Ready(Ok(n))
     }
 
     unsafe fn poll_write_op(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<io::Result<usize>> {
-        let pos = self.pos;
+        let pos = IO::adjust_offset(self.pos);
         let n = ready!(self.as_mut().poll(ctx, |sqe, fd, buf| sqe.prep_write(fd, buf.write_buf(), pos)))?;
         *self.pos() += n;
         Poll::Ready(Ok(n))
@@ -217,7 +217,7 @@ impl<IO: AsRawFd, D: Drive> Ring<IO, D> {
     }
 }
 
-impl<IO: io::Read  + AsRawFd, D: Drive> AsyncRead for Ring<IO, D> {
+impl<IO: io::Read  + RunOnRing, D: Drive> AsyncRead for Ring<IO, D> {
     fn poll_read(mut self: Pin<&mut Self>, ctx: &mut Context<'_>, buf: &mut [u8])
         -> Poll<io::Result<usize>>
     {
@@ -228,7 +228,7 @@ impl<IO: io::Read  + AsRawFd, D: Drive> AsyncRead for Ring<IO, D> {
     }
 }
 
-impl<IO: io::Read  + AsRawFd, D: Drive> AsyncBufRead for Ring<IO, D> {
+impl<IO: io::Read  + RunOnRing, D: Drive> AsyncBufRead for Ring<IO, D> {
     fn poll_fill_buf(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<io::Result<&[u8]>> {
         unsafe {
             let this: &mut Ring<IO, D> = Pin::get_unchecked_mut(self);
@@ -254,7 +254,7 @@ impl<IO: io::Read  + AsRawFd, D: Drive> AsyncBufRead for Ring<IO, D> {
     }
 }
 
-impl<IO: io::Write + AsRawFd, D: Drive> AsyncWrite for Ring<IO, D> {
+impl<IO: io::Write + RunOnRing, D: Drive> AsyncWrite for Ring<IO, D> {
     fn poll_write(self: Pin<&mut Self>, ctx: &mut Context<'_>, buf: &[u8]) -> Poll<io::Result<usize>> {
         unsafe {
             let this: &mut Ring<IO, D> = Pin::get_unchecked_mut(self);
@@ -295,7 +295,7 @@ impl<IO: io::Write + AsRawFd, D: Drive> AsyncWrite for Ring<IO, D> {
     }
 }
 
-impl<IO: io::Seek + AsRawFd, D: Drive> AsyncSeek for Ring<IO, D> {
+impl<IO: io::Seek + RunOnRing, D: Drive> AsyncSeek for Ring<IO, D> {
     fn poll_seek(mut self: Pin<&mut Self>, _: &mut Context, pos: io::SeekFrom)
         -> Poll<io::Result<u64>>
     {
@@ -307,7 +307,7 @@ impl<IO: io::Seek + AsRawFd, D: Drive> AsyncSeek for Ring<IO, D> {
     }
 }
 
-impl<IO: AsRawFd, D: Drive> Drop for Ring<IO, D> {
+impl<IO: RunOnRing, D: Drive> Drop for Ring<IO, D> {
     fn drop(&mut self) {
         if self.current == Current::Nothing {
             unsafe {
@@ -394,4 +394,16 @@ impl Drop for Buffer {
             }
         }
     }
+}
+
+pub trait RunOnRing: AsRawFd {
+    fn adjust_offset(off: usize) -> usize;
+}
+
+impl RunOnRing for std::fs::File {
+    fn adjust_offset(off: usize) -> usize { off }
+}
+
+impl RunOnRing for std::net::TcpStream {
+    fn adjust_offset(_: usize) -> usize { 0 }
 }
