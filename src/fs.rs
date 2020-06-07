@@ -1,8 +1,11 @@
 use std::alloc::{alloc, dealloc, handle_alloc_error, Layout};
 use std::cmp;
+use std::fs;
+use std::future::Future;
 use std::io;
 use std::mem::{self, ManuallyDrop};
 use std::os::unix::io::{AsRawFd, RawFd};
+use std::path::Path;
 use std::pin::Pin;
 use std::ptr;
 use std::slice;
@@ -15,14 +18,15 @@ use crate::completion::Completion;
 use crate::drive::Completion as ExternalCompletion;
 use crate::drive::Drive;
 use crate::drive::demo::DemoDriver;
-use crate::event::Cancellation;
+use crate::event::{OpenAt, Cancellation};
+use crate::Submission;
 
 use State::*;
 
-pub struct Ring<IO: RunOnRing, D: Drive = DemoDriver<'static>> {
+pub struct File<D: Drive = DemoDriver<'static>> {
     state: State,
     current: Current,
-    io: ManuallyDrop<IO>,
+    fd: RawFd,
     completion: Option<Completion>,
     buf: Buffer,
     pos: usize,
@@ -45,22 +49,84 @@ enum Current {
     Close,
 }
 
-impl<IO: RunOnRing> Ring<IO> {
-    pub fn new(io: IO) -> Ring<IO> {
-        Ring::on_driver(io, DemoDriver::default())
+pub struct Open<D: Drive = DemoDriver<'static>>(Submission<OpenAt, D>);
+
+impl<D: Drive> Future for Open<D> {
+    type Output = io::Result<File<D>>;
+
+    fn poll(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<io::Result<File<D>>> {
+        let (_, driver, result) = ready!(self.inner().poll(ctx));
+        let fd = result? as i32;
+        Poll::Ready(Ok(File::from_fd(fd, driver)))
     }
 }
 
-impl<IO: RunOnRing, D: Drive> Ring<IO, D> {
-    pub fn on_driver(io: IO, driver: D) -> Ring<IO, D> {
-        Ring {
+impl<D: Drive> Open<D> {
+    fn inner(self: Pin<&mut Self>) -> Pin<&mut Submission<OpenAt, D>> {
+        unsafe { Pin::map_unchecked_mut(self, |this| &mut this.0) }
+    }
+}
+
+pub struct Create<D: Drive = DemoDriver<'static>>(Submission<OpenAt, D>);
+
+impl<D: Drive> Create<D> {
+    fn inner(self: Pin<&mut Self>) -> Pin<&mut Submission<OpenAt, D>> {
+        unsafe { Pin::map_unchecked_mut(self, |this| &mut this.0) }
+    }
+}
+
+impl<D: Drive> Future for Create<D> {
+    type Output = io::Result<File<D>>;
+
+    fn poll(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<io::Result<File<D>>> {
+        let (_, driver, result) = ready!(self.inner().poll(ctx));
+        let fd = result? as i32;
+        Poll::Ready(Ok(File::from_fd(fd, driver)))
+    }
+}
+
+impl From<fs::File> for File {
+    fn from(file: fs::File) -> File {
+        File::run_on_driver(file, DemoDriver::default())
+    }
+}
+
+impl File {
+    pub fn open(path: impl AsRef<Path>) -> Open {
+        File::open_on_driver(path, DemoDriver::default())
+    }
+
+    pub fn create(path: impl AsRef<Path>) -> Create {
+        File::create_on_driver(path, DemoDriver::default())
+    }
+}
+
+impl<D: Drive> File<D> {
+    pub fn open_on_driver(path: impl AsRef<Path>, driver: D) -> Open<D> {
+        let flags = libc::O_CLOEXEC | libc::O_RDONLY;
+        let event = OpenAt::new(path, libc::AT_FDCWD, flags, 0o666);
+        Open(Submission::new(event, driver))
+    }
+
+    pub fn create_on_driver(path: impl AsRef<Path>, driver: D) -> Create<D> {
+        let flags = libc::O_CLOEXEC | libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC;
+        let event = OpenAt::new(path, libc::AT_FDCWD, flags, 0o666);
+        Create(Submission::new(event, driver))
+    }
+
+    pub fn run_on_driver(file: fs::File, driver: D) -> File<D> {
+        let file = ManuallyDrop::new(file);
+        File::from_fd(file.as_raw_fd(), driver)
+    }
+
+    fn from_fd(fd: RawFd, driver: D) -> File<D> {
+        File {
             state: Inert,
             current: Current::Nothing,
-            io: ManuallyDrop::new(io),
             buf: Buffer::new(),
             completion: None,
             pos: 0,
-            driver,
+            fd, driver
         }
     }
 
@@ -76,33 +142,36 @@ impl<IO: RunOnRing, D: Drive> Ring<IO, D> {
         } else { &[] }
     }
 
-    pub fn blocking(&mut self) -> &mut IO {
-        &mut *self.io
-    }
-
     unsafe fn poll_read_op(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<io::Result<usize>> {
-        let pos = IO::adjust_offset(self.pos);
-        let n = ready!(self.as_mut().poll(ctx, |sqe, fd, buf| sqe.prep_read(fd, buf.read_buf(), pos)))?;
+        let pos = self.pos;
+        let fd = self.fd;
+        let n = ready!(self.as_mut().poll(ctx, |sqe, buf| {
+            sqe.prep_read(fd, buf.read_buf(), pos);
+        }))?;
         *self.pos() += n;
         Poll::Ready(Ok(n))
     }
 
     unsafe fn poll_write_op(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<io::Result<usize>> {
-        let pos = IO::adjust_offset(self.pos);
-        let n = ready!(self.as_mut().poll(ctx, |sqe, fd, buf| sqe.prep_write(fd, buf.write_buf(), pos)))?;
+        let pos = self.pos;
+        let fd = self.fd;
+        let n = ready!(self.as_mut().poll(ctx, |sqe, buf| {
+            sqe.prep_write(fd, buf.write_buf(), pos);
+        }))?;
         *self.pos() += n;
         Poll::Ready(Ok(n))
     }
 
     unsafe fn poll_close_op(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<io::Result<usize>> {
-        self.poll(ctx, |sqe, fd, _| sqe.prep_close(fd))
+        let fd = self.fd;
+        self.poll(ctx, |sqe, _| sqe.prep_close(fd))
     }
 
     #[inline]
     unsafe fn poll(
         mut self: Pin<&mut Self>,
         ctx: &mut Context<'_>,
-        prepare: impl FnOnce(&mut iou::SubmissionQueueEvent<'_>, RawFd, &mut Buffer),
+        prepare: impl FnOnce(&mut iou::SubmissionQueueEvent<'_>, &mut Buffer),
     ) -> Poll<io::Result<usize>> {
         match self.state {
             Inert       => {
@@ -120,7 +189,7 @@ impl<IO: RunOnRing, D: Drive> Ring<IO, D> {
                 }
             }
             Submitted   => self.try_complete(ctx),
-            Lost        => panic!("Ring in a bad state; driver is faulty"),
+            Lost        => panic!("File in a bad state; driver is faulty"),
         }
     }
 
@@ -128,16 +197,15 @@ impl<IO: RunOnRing, D: Drive> Ring<IO, D> {
     unsafe fn try_prepare(
         self: Pin<&mut Self>,
         ctx: &mut Context<'_>,
-        prepare: impl FnOnce(&mut iou::SubmissionQueueEvent<'_>, RawFd, &mut Buffer)
+        prepare: impl FnOnce(&mut iou::SubmissionQueueEvent<'_>, &mut Buffer)
     ) -> Poll<()> {
         let this = Pin::get_unchecked_mut(self);
         let driver = Pin::new_unchecked(&mut this.driver);
         let state = &mut this.state;
         let buf = &mut this.buf;
-        let fd = this.io.as_raw_fd();
         let completion = ready!(driver.poll_prepare(ctx, |mut sqe, ctx| {
             *state = Lost;
-            prepare(&mut sqe, fd, buf);
+            prepare(&mut sqe, buf);
             let completion = Completion::new(ctx.waker().clone());
             sqe.set_user_data(completion.addr());
             ExternalCompletion::new(completion, ctx)
@@ -217,7 +285,7 @@ impl<IO: RunOnRing, D: Drive> Ring<IO, D> {
     }
 }
 
-impl<IO: io::Read  + RunOnRing, D: Drive> AsyncRead for Ring<IO, D> {
+impl<D: Drive> AsyncRead for File<D> {
     fn poll_read(mut self: Pin<&mut Self>, ctx: &mut Context<'_>, buf: &mut [u8])
         -> Poll<io::Result<usize>>
     {
@@ -228,10 +296,10 @@ impl<IO: io::Read  + RunOnRing, D: Drive> AsyncRead for Ring<IO, D> {
     }
 }
 
-impl<IO: io::Read  + RunOnRing, D: Drive> AsyncBufRead for Ring<IO, D> {
+impl<D: Drive> AsyncBufRead for File<D> {
     fn poll_fill_buf(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<io::Result<&[u8]>> {
         unsafe {
-            let this: &mut Ring<IO, D> = Pin::get_unchecked_mut(self);
+            let this: &mut File<D> = Pin::get_unchecked_mut(self);
 
             if !matches!(this.current, Current::Read | Current::Nothing) {
                 this.cancel();
@@ -254,10 +322,10 @@ impl<IO: io::Read  + RunOnRing, D: Drive> AsyncBufRead for Ring<IO, D> {
     }
 }
 
-impl<IO: io::Write + RunOnRing, D: Drive> AsyncWrite for Ring<IO, D> {
+impl<D: Drive> AsyncWrite for File<D> {
     fn poll_write(self: Pin<&mut Self>, ctx: &mut Context<'_>, buf: &[u8]) -> Poll<io::Result<usize>> {
         unsafe {
-            let this: &mut Ring<IO, D> = Pin::get_unchecked_mut(self);
+            let this: &mut File<D> = Pin::get_unchecked_mut(self);
 
             if !matches!(this.current, Current::Write | Current::Nothing) {
                 this.cancel();
@@ -281,7 +349,7 @@ impl<IO: io::Write + RunOnRing, D: Drive> AsyncWrite for Ring<IO, D> {
 
     fn poll_close(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<io::Result<()>> {
         unsafe {
-            let this: &mut Ring<IO, D> = Pin::get_unchecked_mut(self);
+            let this: &mut File<D> = Pin::get_unchecked_mut(self);
 
             if !matches!(this.current, Current::Close | Current::Nothing) {
                 this.cancel();
@@ -295,23 +363,29 @@ impl<IO: io::Write + RunOnRing, D: Drive> AsyncWrite for Ring<IO, D> {
     }
 }
 
-impl<IO: io::Seek + RunOnRing, D: Drive> AsyncSeek for Ring<IO, D> {
+impl<D: Drive> AsyncSeek for File<D> {
     fn poll_seek(mut self: Pin<&mut Self>, _: &mut Context, pos: io::SeekFrom)
         -> Poll<io::Result<u64>>
     {
         match pos {
             io::SeekFrom::Start(n)      => *self.as_mut().pos() = n as usize,
-            _                           => todo!("Ring AsyncSeek not fully implemented")
+            io::SeekFrom::Current(n)    => {
+                *self.as_mut().pos() += if n < 0 { n.abs() } else { n } as usize;
+            }
+            io::SeekFrom::End(_)        => {
+                const MSG: &str = "cannot seek to end of io-uring file";
+                return Poll::Ready(Err(io::Error::new(io::ErrorKind::Other, MSG)))
+            }
         }
         Poll::Ready(Ok(self.pos as u64))
     }
 }
 
-impl<IO: RunOnRing, D: Drive> Drop for Ring<IO, D> {
+impl<D: Drive> Drop for File<D> {
     fn drop(&mut self) {
         if self.current == Current::Nothing {
             unsafe {
-                ManuallyDrop::drop(&mut self.io);
+                libc::close(self.fd);
             }
         } else {
             self.cancel();
@@ -394,16 +468,4 @@ impl Drop for Buffer {
             }
         }
     }
-}
-
-pub trait RunOnRing: AsRawFd {
-    fn adjust_offset(off: usize) -> usize;
-}
-
-impl RunOnRing for std::fs::File {
-    fn adjust_offset(off: usize) -> usize { off }
-}
-
-impl RunOnRing for std::net::TcpStream {
-    fn adjust_offset(_: usize) -> usize { 0 }
 }

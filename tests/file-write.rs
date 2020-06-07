@@ -1,21 +1,21 @@
-use std::fs::File;
-use std::io::Read;
+use std::io::SeekFrom;
 
-use futures::AsyncWriteExt;
+use futures::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 
-use ringbahn::Ring;
+use ringbahn::File;
 
 const ASSERT: &[u8] = b"But this formidable power of death -";
 
 #[test]
 fn write_file() {
     let file = tempfile::tempfile().unwrap();
-    let mut file: Ring<File> = Ring::new(file);
+    let mut file = File::from(file);
     futures::executor::block_on(async move {
         assert_eq!(file.write(ASSERT).await.unwrap(), ASSERT.len());
 
         let mut buf = vec![];
-        assert_eq!(file.blocking().read_to_end(&mut buf).unwrap(), ASSERT.len());
+        assert!(file.seek(SeekFrom::Start(0)).await.is_ok());
+        assert_eq!(file.read_to_end(&mut buf).await.unwrap(), ASSERT.len());
         assert_eq!(&buf[0..ASSERT.len()], ASSERT);
     });
 }
@@ -24,7 +24,7 @@ fn write_file() {
 fn select_complete_many_futures() {
     async fn act() {
         let file = tempfile::tempfile().unwrap();
-        let mut file: Ring<File> = Ring::new(file);
+        let mut file = File::from(file);
         file.write_all(b"hello, world!").await.unwrap();
     }
 
