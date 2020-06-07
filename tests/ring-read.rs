@@ -16,3 +16,14 @@ fn read_file() {
         assert_eq!(&buf[0..ASSERT.len()], ASSERT);
     });
 }
+
+#[test]
+fn read_to_end() {
+    let file = File::open("props.txt").unwrap();
+    let mut file: Ring<File> = Ring::new(file);
+    futures::executor::block_on(async move {
+        let mut buf = Vec::new();
+        assert!(file.read_to_end(&mut buf).await.is_ok());
+        assert_eq!(&buf[0..ASSERT.len()], ASSERT);
+    });
+}
