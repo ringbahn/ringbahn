@@ -9,7 +9,7 @@ use std::slice;
 use std::task::{Context, Poll};
 
 use futures_core::ready;
-use futures_io::{AsyncRead, AsyncBufRead, AsyncWrite};
+use futures_io::{AsyncRead, AsyncBufRead, AsyncWrite, AsyncSeek};
 
 use crate::completion::Completion;
 use crate::drive::Completion as ExternalCompletion;
@@ -292,6 +292,18 @@ impl<IO: io::Write + AsRawFd, D: Drive> AsyncWrite for Ring<IO, D> {
             Poll::Ready(Ok(()))
         }
 
+    }
+}
+
+impl<IO: io::Seek + AsRawFd, D: Drive> AsyncSeek for Ring<IO, D> {
+    fn poll_seek(mut self: Pin<&mut Self>, _: &mut Context, pos: io::SeekFrom)
+        -> Poll<io::Result<u64>>
+    {
+        match pos {
+            io::SeekFrom::Start(n)      => *self.as_mut().pos() = n as usize,
+            _                           => todo!("Ring AsyncSeek not fully implemented")
+        }
+        Poll::Ready(Ok(self.pos as u64))
     }
 }
 
