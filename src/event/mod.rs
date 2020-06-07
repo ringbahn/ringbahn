@@ -1,7 +1,9 @@
 //! Events that can be scheduled on io-uring with a [`Submission`]
 mod cancellation;
 
+mod close;
 mod read;
+mod openat;
 mod write;
 
 use std::marker::Unpin;
@@ -9,7 +11,9 @@ use std::mem::ManuallyDrop;
 
 pub use cancellation::Cancellation;
 
+pub use close::Close;
 pub use read::Read;
+pub use openat::OpenAt;
 pub use write::Write;
 
 /// An IO event that can be scheduled on an io-uring driver.
