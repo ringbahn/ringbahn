@@ -271,7 +271,7 @@ impl From<fs::File> for File {
     }
 }
 
-impl From<File> for fs::File {
+impl<D: Drive> From<File<D>> for fs::File {
     fn from(mut file: File) -> fs::File {
         unsafe {
             Pin::new_unchecked(&mut file).cancel();
