@@ -15,7 +15,7 @@ impl Close {
 
 impl Event for Close {
     unsafe fn prepare(&mut self, sqe: &mut iou::SubmissionQueueEvent<'_>) {
-        sqe.prep_close(self.fd);
+        uring_sys::io_uring_prep_close(sqe.raw_mut(), self.fd)
     }
 
     fn cancellation(_: &mut ManuallyDrop<Self>) -> Cancellation {

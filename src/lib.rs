@@ -2,6 +2,7 @@ pub mod fs;
 pub mod drive;
 pub mod event;
 
+mod engine;
 mod submission;
 mod completion;
 

@@ -14,36 +14,20 @@ use std::task::{Context, Poll};
 use futures_core::ready;
 use futures_io::{AsyncRead, AsyncBufRead, AsyncWrite, AsyncSeek};
 
-use crate::completion::Completion;
-use crate::drive::Completion as ExternalCompletion;
 use crate::drive::Drive;
 use crate::drive::demo::DemoDriver;
+use crate::engine::Engine;
 use crate::event::{OpenAt, Cancellation};
 use crate::Submission;
 
-use State::*;
-
 pub struct File<D: Drive = DemoDriver<'static>> {
-    state: State,
-    current: Current,
-    fd: RawFd,
-    completion: Option<Completion>,
+    engine: Engine<Op, D>,
     buf: Buffer,
     pos: usize,
-    driver: D,
 }
 
 #[derive(Debug, Eq, PartialEq)]
-enum State {
-    Inert = 0,
-    Prepared,
-    Submitted,
-    Lost,
-}
-
-#[derive(Eq, PartialEq)]
-enum Current {
-    Nothing = 0,
+enum Op {
     Read,
     Write,
     Close,
@@ -121,165 +105,55 @@ impl<D: Drive> File<D> {
 
     fn from_fd(fd: RawFd, driver: D) -> File<D> {
         File {
-            state: Inert,
-            current: Current::Nothing,
+            engine: Engine::new(fd, driver),
             buf: Buffer::new(),
-            completion: None,
             pos: 0,
-            fd, driver
         }
     }
 
     pub fn read_buffered(&self) -> &[u8] {
-        if self.current == Current::Read { 
+        if self.engine.active() == Some(&Op::Read) { 
             todo!()
         } else { &[] }
     }
 
     pub fn write_buffered(&self) -> &[u8] {
-        if self.current == Current::Write { 
+        if self.engine.active() == Some(&Op::Write) { 
             todo!()
         } else { &[] }
     }
 
-    unsafe fn poll_read_op(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<io::Result<usize>> {
-        let pos = self.pos;
-        let fd = self.fd;
-        let n = ready!(self.as_mut().poll(ctx, |sqe, buf| {
-            sqe.prep_read(fd, buf.read_buf(), pos);
-        }))?;
-        *self.pos() += n;
-        Poll::Ready(Ok(n))
-    }
-
-    unsafe fn poll_write_op(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<io::Result<usize>> {
-        let pos = self.pos;
-        let fd = self.fd;
-        let n = ready!(self.as_mut().poll(ctx, |sqe, buf| {
-            sqe.prep_write(fd, buf.write_buf(), pos);
-        }))?;
-        *self.pos() += n;
-        Poll::Ready(Ok(n))
-    }
-
-    unsafe fn poll_close_op(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<io::Result<usize>> {
-        let fd = self.fd;
-        self.poll(ctx, |sqe, _| sqe.prep_close(fd))
-    }
-
-    #[inline]
-    unsafe fn poll(
-        mut self: Pin<&mut Self>,
-        ctx: &mut Context<'_>,
-        prepare: impl FnOnce(&mut iou::SubmissionQueueEvent<'_>, &mut Buffer),
-    ) -> Poll<io::Result<usize>> {
-        match self.state {
-            Inert       => {
-                ready!(self.as_mut().try_prepare(ctx, prepare));
-                ready!(self.as_mut().try_submit(ctx));
-                Poll::Pending
-            }
-            Prepared    => {
-                match self.as_mut().try_complete(ctx) {
-                    ready @ Poll::Ready(..) => ready,
-                    Poll::Pending           => {
-                        ready!(self.as_mut().try_submit(ctx));
-                        Poll::Pending
-                    }
-                }
-            }
-            Submitted   => self.try_complete(ctx),
-            Lost        => panic!("File in a bad state; driver is faulty"),
+    fn cancel(self: Pin<&mut Self>) {
+        let (mut engine, buf, _) = self.split();
+        if let Some(active) = engine.active() {
+            let cancellation = match active {
+                Op::Read | Op::Write    => buf.cancellation(),
+                Op::Close               => Cancellation::null(),
+            };
+            engine.as_mut().cancel(cancellation);
+            engine.unset_active();
         }
     }
 
-    #[inline]
-    unsafe fn try_prepare(
-        self: Pin<&mut Self>,
-        ctx: &mut Context<'_>,
-        prepare: impl FnOnce(&mut iou::SubmissionQueueEvent<'_>, &mut Buffer)
-    ) -> Poll<()> {
-        let this = Pin::get_unchecked_mut(self);
-        let driver = Pin::new_unchecked(&mut this.driver);
-        let state = &mut this.state;
-        let buf = &mut this.buf;
-        let completion = ready!(driver.poll_prepare(ctx, |mut sqe, ctx| {
-            *state = Lost;
-            prepare(&mut sqe, buf);
-            let completion = Completion::new(ctx.waker().clone());
-            sqe.set_user_data(completion.addr());
-            ExternalCompletion::new(completion, ctx)
-        }));
-        *state = Prepared;
-        this.completion = Some(completion.real);
-        Poll::Ready(())
-    }
-
-    #[inline]
-    unsafe fn try_submit(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<()> {
-        // TODO figure out how to handle this result
-        let _ = ready!(self.as_mut().driver().poll_submit(ctx, true));
-        *self.state() = Submitted;
-        Poll::Ready(())
-    }
-
-    #[inline]
-    unsafe fn try_complete(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<io::Result<usize>> {
-        if let Some(result) = self.completion.as_ref().and_then(|c| c.check()) {
-            *self.as_mut().state() = Inert;
-            self.as_mut().completion().take().unwrap().deallocate();
-            Poll::Ready(result)
-        } else {
-            if let Some(completion) = &self.completion {
-                completion.set_waker(ctx.waker().clone());
-            }
-            Poll::Pending
-        }
-    }
-
-    fn cancel(&mut self) {
+    #[inline(always)]
+    fn split(self: Pin<&mut Self>) -> (Pin<&mut Engine<Op, D>>, &mut Buffer, &mut usize) {
         unsafe {
-            match self.current {
-                Current::Read | Current::Write    => {
-                    let mut cancellation = self.buf.cancellation();
-                    if let Some(completion) = self.completion.take() {
-                        completion.cancel(cancellation);
-                    } else {
-                        cancellation.cancel();
-                    }
-                    self.current = Current::Nothing;
-                }
-                Current::Close                   => {
-                    if let Some(completion) = self.completion.take() {
-                        completion.cancel(Cancellation::null());
-                    }
-                }
-                Current::Nothing                 => { }
-            }
+            let this = Pin::get_unchecked_mut(self);
+            (Pin::new_unchecked(&mut this.engine), &mut this.buf, &mut this.pos)
         }
     }
 
-    #[inline]
-    fn driver(self: Pin<&mut Self>) -> Pin<&mut D> {
-        unsafe { Pin::map_unchecked_mut(self, |this| &mut this.driver) }
+    #[inline(always)]
+    fn engine(self: Pin<&mut Self>) -> Pin<&mut Engine<Op, D>> {
+        unsafe { Pin::map_unchecked_mut(self, |this| &mut this.engine) }
     }
 
-    #[inline]
-    fn state(self: Pin<&mut Self>) -> Pin<&mut State> {
-        unsafe { Pin::map_unchecked_mut(self, |this| &mut this.state) }
-    }
-
-    #[inline]
-    fn completion(self: Pin<&mut Self>) -> Pin<&mut Option<Completion>> {
-        unsafe { Pin::map_unchecked_mut(self, |this| &mut this.completion) }
-    }
-
-    #[inline]
+    #[inline(always)]
     fn buf(self: Pin<&mut Self>) -> Pin<&mut Buffer> {
         unsafe { Pin::map_unchecked_mut(self, |this| &mut this.buf) }
     }
 
-    #[inline]
+    #[inline(always)]
     fn pos(self: Pin<&mut Self>) -> Pin<&mut usize> {
         unsafe { Pin::map_unchecked_mut(self, |this| &mut this.pos) }
     }
@@ -297,24 +171,26 @@ impl<D: Drive> AsyncRead for File<D> {
 }
 
 impl<D: Drive> AsyncBufRead for File<D> {
-    fn poll_fill_buf(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<io::Result<&[u8]>> {
-        unsafe {
-            let this: &mut File<D> = Pin::get_unchecked_mut(self);
-
-            if !matches!(this.current, Current::Read | Current::Nothing) {
-                this.cancel();
-            }
-
-            this.current = Current::Read;
-            if this.buf.consumed >= this.buf.read {
-                this.buf.read = ready!(Pin::new_unchecked(&mut *this).poll_read_op(ctx))? as u32;
-                this.buf.consumed = 0;
-            }
-            let consumed = this.buf.consumed as usize;
-            let read = this.buf.read as usize;
-            let slice = &this.buf.data()[consumed..read];
-            Poll::Ready(Ok(slice))
+    fn poll_fill_buf(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<io::Result<&[u8]>> {
+        if !matches!(self.engine.active(), None | Some(&Op::Read)) {
+            println!("{:?}", self.engine.active());
+            self.as_mut().cancel();
         }
+
+        let (mut engine, buf, pos) = self.split();
+        engine.as_mut().set_active(Op::Read);
+
+        if buf.consumed >= buf.read {
+            buf.read = unsafe {
+                ready!(engine.poll(ctx, |sqe, fd| sqe.prep_read(fd, buf.read_buf(), *pos)))? as u32
+            };
+            buf.consumed = 0;
+            *pos += buf.read as usize;
+        }
+
+        let consumed = buf.consumed as usize;
+        let read = buf.read as usize;
+        Poll::Ready(Ok(&buf.data()[consumed..read]))
     }
 
     fn consume(self: Pin<&mut Self>, amt: usize) {
@@ -323,23 +199,28 @@ impl<D: Drive> AsyncBufRead for File<D> {
 }
 
 impl<D: Drive> AsyncWrite for File<D> {
-    fn poll_write(self: Pin<&mut Self>, ctx: &mut Context<'_>, buf: &[u8]) -> Poll<io::Result<usize>> {
-        unsafe {
-            let this: &mut File<D> = Pin::get_unchecked_mut(self);
-
-            if !matches!(this.current, Current::Write | Current::Nothing) {
-                this.cancel();
-            }
-
-            this.current = Current::Write;
-            if this.buf.written == 0 {
-                this.buf.written = io::Write::write(&mut this.buf.data_mut(), buf).unwrap() as u32;
-            }
-
-            let result = ready!(Pin::new_unchecked(&mut *this).poll_write_op(ctx));
-            this.buf.written = 0;
-            Poll::Ready(result)
+    fn poll_write(mut self: Pin<&mut Self>, ctx: &mut Context<'_>, slice: &[u8]) -> Poll<io::Result<usize>> {
+        if !matches!(self.engine.active(), None | Some(&Op::Write)) {
+            self.as_mut().cancel();
         }
+
+        let (mut engine, buf, pos) = self.split();
+        engine.as_mut().set_active(Op::Write);
+
+        if buf.written == 0 {
+            buf.written = io::Write::write(&mut buf.data_mut(), slice).unwrap() as u32;
+        }
+
+        let result = unsafe {
+            ready!(engine.poll(ctx, |sqe, fd| sqe.prep_write(fd, buf.write_buf(), *pos)))
+        };
+
+        if let &Ok(n) = &result {
+            *pos += n;
+        }
+        buf.written = 0;
+
+        Poll::Ready(result)
     }
 
     fn poll_flush(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<io::Result<()>> {
@@ -347,19 +228,16 @@ impl<D: Drive> AsyncWrite for File<D> {
         Poll::Ready(Ok(()))
     }
 
-    fn poll_close(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        unsafe {
-            let this: &mut File<D> = Pin::get_unchecked_mut(self);
-
-            if !matches!(this.current, Current::Close | Current::Nothing) {
-                this.cancel();
-            }
-
-            this.current = Current::Close;
-            ready!(Pin::new_unchecked(this).poll_close_op(ctx))?;
-            Poll::Ready(Ok(()))
+    fn poll_close(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        if !matches!(self.engine.active(), None | Some(&Op::Close)) {
+            self.as_mut().cancel();
         }
-
+        let mut engine = self.engine();
+        engine.as_mut().set_active(Op::Close);
+        unsafe { 
+            ready!(engine.poll(ctx, |sqe, fd| uring_sys::io_uring_prep_close(sqe.raw_mut(), fd)))?;
+        }
+        Poll::Ready(Ok(()))
     }
 }
 
@@ -383,12 +261,12 @@ impl<D: Drive> AsyncSeek for File<D> {
 
 impl<D: Drive> Drop for File<D> {
     fn drop(&mut self) {
-        if self.current == Current::Nothing {
-            unsafe {
-                libc::close(self.fd);
+        unsafe {
+            if self.engine.active().is_some() {
+                Pin::new_unchecked(self).cancel();
+            } else {
+                libc::close(self.engine.fd());
             }
-        } else {
-            self.cancel();
         }
     }
 }
