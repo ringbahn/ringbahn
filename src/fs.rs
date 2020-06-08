@@ -1,3 +1,5 @@
+//! Interact with the file system using io-uring
+
 use std::alloc::{alloc, dealloc, handle_alloc_error, Layout};
 use std::cmp;
 use std::fs;
@@ -20,6 +22,7 @@ use crate::engine::Engine;
 use crate::event::{OpenAt, Cancellation};
 use crate::Submission;
 
+/// A file handle that runs on io-uring
 pub struct File<D: Drive = DemoDriver<'static>> {
     engine: Engine<Op, D>,
     buf: Buffer,
@@ -33,6 +36,7 @@ enum Op {
     Close,
 }
 
+/// A future representing an opening file.
 pub struct Open<D: Drive = DemoDriver<'static>>(Submission<OpenAt, D>);
 
 impl<D: Drive> Future for Open<D> {
@@ -51,6 +55,7 @@ impl<D: Drive> Open<D> {
     }
 }
 
+/// A future representing a file being created.
 pub struct Create<D: Drive = DemoDriver<'static>>(Submission<OpenAt, D>);
 
 impl<D: Drive> Create<D> {
@@ -70,28 +75,33 @@ impl<D: Drive> Future for Create<D> {
 }
 
 impl File {
+    /// Open a file using the default driver
     pub fn open(path: impl AsRef<Path>) -> Open {
         File::open_on_driver(path, DemoDriver::default())
     }
 
+    /// Create a new file using the default driver
     pub fn create(path: impl AsRef<Path>) -> Create {
         File::create_on_driver(path, DemoDriver::default())
     }
 }
 
 impl<D: Drive> File<D> {
+    /// Open a file
     pub fn open_on_driver(path: impl AsRef<Path>, driver: D) -> Open<D> {
         let flags = libc::O_CLOEXEC | libc::O_RDONLY;
         let event = OpenAt::new(path, libc::AT_FDCWD, flags, 0o666);
         Open(Submission::new(event, driver))
     }
 
+    /// Create a file
     pub fn create_on_driver(path: impl AsRef<Path>, driver: D) -> Create<D> {
         let flags = libc::O_CLOEXEC | libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC;
         let event = OpenAt::new(path, libc::AT_FDCWD, flags, 0o666);
         Create(Submission::new(event, driver))
     }
 
+    /// Take an existing file and run its IO on an io-uring driver
     pub fn run_on_driver(file: fs::File, driver: D) -> File<D> {
         let file = ManuallyDrop::new(file);
         File::from_fd(file.as_raw_fd(), driver)
@@ -105,6 +115,11 @@ impl<D: Drive> File<D> {
         }
     }
 
+    /// Access any data that has been read into the buffer, but not consumed
+    ///
+    /// This is similar to the fill_buf method from AsyncBufRead, but instead of performing IO if
+    /// the buffer is empty, it will just return an empty slice. This method can be used to copy
+    /// out any left over buffered data before closing or performing a write.
     pub fn read_buffered(&self) -> &[u8] {
         if self.engine.active() == Some(&Op::Read) && self.buf.data != ptr::null_mut() {
             unsafe {
