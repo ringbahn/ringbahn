@@ -272,7 +272,7 @@ impl From<fs::File> for File {
 }
 
 impl<D: Drive> From<File<D>> for fs::File {
-    fn from(mut file: File) -> fs::File {
+    fn from(mut file: File<D>) -> fs::File {
         unsafe {
             Pin::new_unchecked(&mut file).cancel();
             let file = ManuallyDrop::new(file);
