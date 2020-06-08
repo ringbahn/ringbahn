@@ -4,7 +4,7 @@ use std::fs;
 use std::future::Future;
 use std::io;
 use std::mem::{self, ManuallyDrop};
-use std::os::unix::io::{AsRawFd, RawFd};
+use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 use std::path::Path;
 use std::pin::Pin;
 use std::ptr;
@@ -69,12 +69,6 @@ impl<D: Drive> Future for Create<D> {
     }
 }
 
-impl From<fs::File> for File {
-    fn from(file: fs::File) -> File {
-        File::run_on_driver(file, DemoDriver::default())
-    }
-}
-
 impl File {
     pub fn open(path: impl AsRef<Path>) -> Open {
         File::open_on_driver(path, DemoDriver::default())
@@ -112,14 +106,11 @@ impl<D: Drive> File<D> {
     }
 
     pub fn read_buffered(&self) -> &[u8] {
-        if self.engine.active() == Some(&Op::Read) { 
-            todo!()
-        } else { &[] }
-    }
-
-    pub fn write_buffered(&self) -> &[u8] {
-        if self.engine.active() == Some(&Op::Write) { 
-            todo!()
+        if self.engine.active() == Some(&Op::Read) && self.buf.data != ptr::null_mut() {
+            unsafe {
+                let ptr = self.buf.data.offset(self.buf.consumed as isize);
+                slice::from_raw_parts(ptr, (self.buf.read - self.buf.consumed) as usize)
+            }
         } else { &[] }
     }
 
@@ -256,6 +247,22 @@ impl<D: Drive> AsyncSeek for File<D> {
             }
         }
         Poll::Ready(Ok(self.pos as u64))
+    }
+}
+
+impl From<fs::File> for File {
+    fn from(file: fs::File) -> File {
+        File::run_on_driver(file, DemoDriver::default())
+    }
+}
+
+impl From<File> for fs::File {
+    fn from(mut file: File) -> fs::File {
+        unsafe {
+            Pin::new_unchecked(&mut file).cancel();
+            let file = ManuallyDrop::new(file);
+            fs::File::from_raw_fd(file.engine.fd())
+        }
     }
 }
 
