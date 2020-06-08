@@ -16,7 +16,7 @@ use crate::buf::Buffer;
 use crate::drive::Drive;
 use crate::drive::demo::DemoDriver;
 use crate::ring::Ring;
-use crate::event::{OpenAt, Cancellation};
+use crate::event::OpenAt;
 use crate::Submission;
 
 /// A file handle that runs on io-uring
@@ -34,6 +34,7 @@ enum Op {
     Write,
     Close,
     Nothing,
+    Statx,
 }
 
 /// A future representing an opening file.
@@ -137,13 +138,25 @@ impl<D: Drive> File<D> {
     }
 
     fn cancel(&mut self) {
-        let cancellation = match self.active {
-            Op::Read | Op::Write    => self.buf.cancellation(),
-            Op::Close               => Cancellation::null(),
-            Op::Nothing             => return,
-        };
-        self.active = Op::Nothing;
-        self.ring.cancel(cancellation);
+        self.ring.cancel(self.buf.cancellation());
+    }
+
+    fn poll_file_size(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<io::Result<usize>> {
+        static EMPTY: libc::c_char = 0;
+
+        self.as_mut().guard_op(Op::Statx);
+        let fd = self.fd;
+        let (ring, buf, _) = self.split();
+        let statx = buf.as_statx();
+        let flags = libc::AT_EMPTY_PATH;
+        let mask = libc::STATX_SIZE;
+        unsafe {
+            ready!(ring.poll(ctx, |sqe| {
+                uring_sys::io_uring_prep_statx(sqe.raw_mut(), fd, &EMPTY, flags, mask, statx);
+            }))?;
+
+            Poll::Ready(Ok((*statx).stx_size as usize))
+        }
     }
 
     #[inline(always)]
@@ -228,7 +241,7 @@ impl<D: Drive> AsyncWrite for File<D> {
 }
 
 impl<D: Drive> AsyncSeek for File<D> {
-    fn poll_seek(mut self: Pin<&mut Self>, _: &mut Context, pos: io::SeekFrom)
+    fn poll_seek(mut self: Pin<&mut Self>, ctx: &mut Context, pos: io::SeekFrom)
         -> Poll<io::Result<u64>>
     {
         match pos {
@@ -236,9 +249,9 @@ impl<D: Drive> AsyncSeek for File<D> {
             io::SeekFrom::Current(n)    => {
                 *self.as_mut().pos() += if n < 0 { n.abs() } else { n } as usize;
             }
-            io::SeekFrom::End(_)        => {
-                const MSG: &str = "cannot seek to end of io-uring file";
-                return Poll::Ready(Err(io::Error::new(io::ErrorKind::Other, MSG)))
+            io::SeekFrom::End(n)        => {
+                let end = ready!(self.as_mut().poll_file_size(ctx))?;
+                *self.as_mut().pos() = end + if n < 0 { n.abs() } else { n} as usize;
             }
         }
         Poll::Ready(Ok(self.pos as u64))
