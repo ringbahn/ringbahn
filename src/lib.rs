@@ -2,10 +2,11 @@ pub mod fs;
 pub mod drive;
 pub mod event;
 
-mod engine;
-mod submission;
 mod completion;
+mod ring;
+mod submission;
 
+pub use ring::Ring;
 pub use submission::Submission;
 
 #[doc(inline)]
