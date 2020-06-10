@@ -148,6 +148,7 @@ impl<D: Drive> File<D> {
             Op::Close               => Cancellation::null(),
             Op::Nothing             => return,
         };
+        self.active = Op::Nothing;
         self.ring.cancel(cancellation);
     }
 
