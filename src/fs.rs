@@ -18,22 +18,25 @@ use futures_io::{AsyncRead, AsyncBufRead, AsyncWrite, AsyncSeek};
 
 use crate::drive::Drive;
 use crate::drive::demo::DemoDriver;
-use crate::engine::Engine;
+use crate::ring::Ring;
 use crate::event::{OpenAt, Cancellation};
 use crate::Submission;
 
 /// A file handle that runs on io-uring
 pub struct File<D: Drive = DemoDriver<'static>> {
-    engine: Engine<Op, D>,
+    ring: Ring<D>,
+    fd: RawFd,
+    active: Op,
     buf: Buffer,
     pos: usize,
 }
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum Op {
     Read,
     Write,
     Close,
+    Nothing,
 }
 
 /// A future representing an opening file.
@@ -109,9 +112,11 @@ impl<D: Drive> File<D> {
 
     fn from_fd(fd: RawFd, driver: D) -> File<D> {
         File {
-            engine: Engine::new(fd, driver),
+            ring: Ring::new(driver),
+            active: Op::Nothing,
             buf: Buffer::new(),
             pos: 0,
+            fd,
         }
     }
 
@@ -121,7 +126,7 @@ impl<D: Drive> File<D> {
     /// the buffer is empty, it will just return an empty slice. This method can be used to copy
     /// out any left over buffered data before closing or performing a write.
     pub fn read_buffered(&self) -> &[u8] {
-        if self.engine.active() == Some(&Op::Read) && self.buf.data != ptr::null_mut() {
+        if self.active == Op::Read && self.buf.data != ptr::null_mut() {
             unsafe {
                 let ptr = self.buf.data.offset(self.buf.consumed as isize);
                 slice::from_raw_parts(ptr, (self.buf.read - self.buf.consumed) as usize)
@@ -129,29 +134,34 @@ impl<D: Drive> File<D> {
         } else { &[] }
     }
 
-    fn cancel(self: Pin<&mut Self>) {
-        let (mut engine, buf, _) = self.split();
-        if let Some(active) = engine.active() {
-            let cancellation = match active {
-                Op::Read | Op::Write    => buf.cancellation(),
-                Op::Close               => Cancellation::null(),
-            };
-            engine.as_mut().cancel(cancellation);
-            engine.unset_active();
+    fn guard_op(self: Pin<&mut Self>, op: Op) {
+        let this = unsafe { Pin::get_unchecked_mut(self) };
+        if this.active != Op::Nothing && this.active != op {
+            this.cancel();
         }
+        this.active = op;
+    }
+
+    fn cancel(&mut self) {
+        let cancellation = match self.active {
+            Op::Read | Op::Write    => self.buf.cancellation(),
+            Op::Close               => Cancellation::null(),
+            Op::Nothing             => return,
+        };
+        self.ring.cancel(cancellation);
     }
 
     #[inline(always)]
-    fn split(self: Pin<&mut Self>) -> (Pin<&mut Engine<Op, D>>, &mut Buffer, &mut usize) {
+    fn split(self: Pin<&mut Self>) -> (Pin<&mut Ring<D>>, &mut Buffer, &mut usize) {
         unsafe {
             let this = Pin::get_unchecked_mut(self);
-            (Pin::new_unchecked(&mut this.engine), &mut this.buf, &mut this.pos)
+            (Pin::new_unchecked(&mut this.ring), &mut this.buf, &mut this.pos)
         }
     }
 
     #[inline(always)]
-    fn engine(self: Pin<&mut Self>) -> Pin<&mut Engine<Op, D>> {
-        unsafe { Pin::map_unchecked_mut(self, |this| &mut this.engine) }
+    fn ring(self: Pin<&mut Self>) -> Pin<&mut Ring<D>> {
+        unsafe { Pin::map_unchecked_mut(self, |this| &mut this.ring) }
     }
 
     #[inline(always)]
@@ -178,17 +188,14 @@ impl<D: Drive> AsyncRead for File<D> {
 
 impl<D: Drive> AsyncBufRead for File<D> {
     fn poll_fill_buf(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<io::Result<&[u8]>> {
-        if !matches!(self.engine.active(), None | Some(&Op::Read)) {
-            println!("{:?}", self.engine.active());
-            self.as_mut().cancel();
-        }
+        self.as_mut().guard_op(Op::Read);
 
-        let (mut engine, buf, pos) = self.split();
-        engine.as_mut().set_active(Op::Read);
+        let fd = self.fd;
+        let (ring, buf, pos) = self.split();
 
         if buf.consumed >= buf.read {
             buf.read = unsafe {
-                ready!(engine.poll(ctx, |sqe, fd| sqe.prep_read(fd, buf.read_buf(), *pos)))? as u32
+                ready!(ring.poll(ctx, |sqe| sqe.prep_read(fd, buf.read_buf(), *pos)))? as u32
             };
             buf.consumed = 0;
             *pos += buf.read as usize;
@@ -206,24 +213,23 @@ impl<D: Drive> AsyncBufRead for File<D> {
 
 impl<D: Drive> AsyncWrite for File<D> {
     fn poll_write(mut self: Pin<&mut Self>, ctx: &mut Context<'_>, slice: &[u8]) -> Poll<io::Result<usize>> {
-        if !matches!(self.engine.active(), None | Some(&Op::Write)) {
-            self.as_mut().cancel();
-        }
+        self.as_mut().guard_op(Op::Write);
 
-        let (mut engine, buf, pos) = self.split();
-        engine.as_mut().set_active(Op::Write);
+        let fd = self.fd;
+        let (ring, buf, pos) = self.split();
 
         if buf.written == 0 {
             buf.written = io::Write::write(&mut buf.data_mut(), slice).unwrap() as u32;
         }
 
-        let result = unsafe {
-            ready!(engine.poll(ctx, |sqe, fd| sqe.prep_write(fd, buf.write_buf(), *pos)))
-        };
+        let result = ready!(ring.poll(ctx, |sqe| unsafe {
+            sqe.prep_write(fd, buf.write_buf(), *pos)
+        }));
 
         if let &Ok(n) = &result {
             *pos += n;
         }
+
         buf.written = 0;
 
         Poll::Ready(result)
@@ -235,14 +241,11 @@ impl<D: Drive> AsyncWrite for File<D> {
     }
 
     fn poll_close(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        if !matches!(self.engine.active(), None | Some(&Op::Close)) {
-            self.as_mut().cancel();
-        }
-        let mut engine = self.engine();
-        engine.as_mut().set_active(Op::Close);
-        unsafe { 
-            ready!(engine.poll(ctx, |sqe, fd| uring_sys::io_uring_prep_close(sqe.raw_mut(), fd)))?;
-        }
+        self.as_mut().guard_op(Op::Close);
+        let fd = self.fd;
+        ready!(self.ring().poll(ctx, |sqe| unsafe {
+            uring_sys::io_uring_prep_close(sqe.raw_mut(), fd)
+        }))?;
         Poll::Ready(Ok(()))
     }
 }
@@ -274,21 +277,18 @@ impl From<fs::File> for File {
 impl<D: Drive> From<File<D>> for fs::File {
     fn from(mut file: File<D>) -> fs::File {
         unsafe {
-            Pin::new_unchecked(&mut file).cancel();
+            file.cancel();
             let file = ManuallyDrop::new(file);
-            fs::File::from_raw_fd(file.engine.fd())
+            fs::File::from_raw_fd(file.fd)
         }
     }
 }
 
 impl<D: Drive> Drop for File<D> {
     fn drop(&mut self) {
-        unsafe {
-            if self.engine.active().is_some() {
-                Pin::new_unchecked(self).cancel();
-            } else {
-                libc::close(self.engine.fd());
-            }
+        match self.active {
+            Op::Nothing => unsafe { libc::close(self.fd); },
+            _           => self.cancel(),
         }
     }
 }
