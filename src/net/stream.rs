@@ -11,7 +11,7 @@ use futures_io::{AsyncRead, AsyncBufRead, AsyncWrite};
 use crate::buf::Buffer;
 use crate::drive::demo::DemoDriver;
 use crate::{Drive, Ring};
-use crate::event::{self, Cancellation};
+use crate::event;
 use crate::Submission;
 
 use super::socket;
@@ -63,13 +63,8 @@ impl<D: Drive> TcpStream<D> {
     }
 
     fn cancel(&mut self) {
-        let cancellation = match self.active {
-            Op::Read | Op::Write    => self.buf.cancellation(),
-            Op::Close               => Cancellation::null(),
-            Op::Nothing             => return,
-        };
         self.active = Op::Nothing;
-        self.ring.cancel(cancellation);
+        self.ring.cancel(self.buf.cancellation());
     }
 
     #[inline(always)]
