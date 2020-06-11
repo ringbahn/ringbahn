@@ -138,6 +138,7 @@ impl<D: Drive> File<D> {
     }
 
     fn cancel(&mut self) {
+        self.active = Op::Nothing;
         self.ring.cancel(self.buf.cancellation());
     }
 
