@@ -1,6 +1,7 @@
 //! Events that can be scheduled on io-uring with a [`Submission`]
 mod cancellation;
 
+mod connect;
 mod close;
 mod read;
 mod openat;
@@ -11,6 +12,7 @@ use std::mem::ManuallyDrop;
 
 pub use cancellation::Cancellation;
 
+pub use connect::Connect;
 pub use close::Close;
 pub use read::Read;
 pub use openat::OpenAt;
