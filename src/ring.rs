@@ -66,6 +66,10 @@ impl<D: Drive> Ring<D> {
         &self.driver
     }
 
+    pub fn driver_pinned(self: Pin<&mut Self>) -> Pin<&mut D> {
+        unsafe { Pin::map_unchecked_mut(self, |this| &mut this.driver) }
+    }
+
     /// Poll the ring state machine.
     ///
     /// This accepts a callback, `prepare`, which prepares an event to be submitted to io-uring.

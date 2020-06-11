@@ -15,7 +15,7 @@ const CQ_ENTRIES: usize = (SQ_ENTRIES * 2) as usize;
 
 use access_queue::*;
 
-use super::{Drive, Completion};
+use super::{Drive, HeapBuffer, Completion};
 
 static SQ: Lazy<AccessQueue<Mutex<iou::SubmissionQueue<'static>>>> = Lazy::new(init_sq);
 
@@ -37,6 +37,9 @@ impl<'a> Clone for DemoDriver<'a> {
 }
 
 impl Drive for DemoDriver<'_> {
+    type ReadBuf = HeapBuffer;
+    type WriteBuf = HeapBuffer;
+
     fn poll_prepare<'cx>(
         mut self: Pin<&mut Self>,
         ctx: &mut Context<'cx>,

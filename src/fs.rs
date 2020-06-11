@@ -1,9 +1,10 @@
 //! Interact with the file system using io-uring
 
+use std::cmp;
 use std::fs;
 use std::future::Future;
 use std::io;
-use std::mem::ManuallyDrop;
+use std::mem::{self, MaybeUninit, ManuallyDrop};
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 use std::path::Path;
 use std::pin::Pin;
@@ -13,7 +14,7 @@ use futures_core::ready;
 use futures_io::{AsyncRead, AsyncBufRead, AsyncWrite, AsyncSeek};
 
 use crate::buf::Buffer;
-use crate::drive::Drive;
+use crate::drive::{Drive, ProvideBuffer};
 use crate::drive::demo::DemoDriver;
 use crate::ring::Ring;
 use crate::event::OpenAt;
@@ -24,7 +25,7 @@ pub struct File<D: Drive = DemoDriver<'static>> {
     ring: Ring<D>,
     fd: RawFd,
     active: Op,
-    buf: Buffer,
+    buf: Buffer<D>,
     pos: usize,
 }
 
@@ -125,7 +126,7 @@ impl<D: Drive> File<D> {
     }
 
     #[inline(always)]
-    fn split(self: Pin<&mut Self>) -> (Pin<&mut Ring<D>>, &mut Buffer, &mut usize) {
+    fn split(self: Pin<&mut Self>) -> (Pin<&mut Ring<D>>, &mut Buffer<D>, &mut usize) {
         unsafe {
             let this = Pin::get_unchecked_mut(self);
             (Pin::new_unchecked(&mut this.ring), &mut this.buf, &mut this.pos)
@@ -138,7 +139,7 @@ impl<D: Drive> File<D> {
     }
 
     #[inline(always)]
-    fn buf(self: Pin<&mut Self>) -> Pin<&mut Buffer> {
+    fn buf(self: Pin<&mut Self>) -> Pin<&mut Buffer<D>> {
         unsafe { Pin::map_unchecked_mut(self, |this| &mut this.buf) }
     }
 
@@ -164,11 +165,23 @@ impl<D: Drive> AsyncBufRead for File<D> {
         self.as_mut().guard_op(Op::Read);
         let fd = self.fd;
         let (ring, buf, pos) = self.split();
-        buf.fill_buf(|buf| {
-            let n = ready!(ring.poll(ctx, true, |sqe| unsafe { sqe.prep_read(fd, buf, *pos) }))?;
-            *pos += n;
-            Poll::Ready(Ok(n as u32))
-        })
+        unsafe {
+            buf.fill_read_buf(ctx, ring, |ring, ctx, buf| {
+                let n = ready!(ring.poll(ctx, true, |sqe| {
+                    buf.prepare(sqe);
+                    let sqe = sqe.raw_mut();
+                    sqe.opcode = uring_sys::IoRingOp::IORING_OP_READ as u8;
+                    sqe.flags = 0;
+                    sqe.ioprio = 0;
+                    sqe.fd = fd;
+                    sqe.off_addr2.off = *pos as u64;
+                    sqe.cmd_flags.rw_flags = 0;
+                    sqe.user_data = 0;
+                }))?;
+                *pos += n;
+                Poll::Ready(Ok(n as u32))
+            })
+        }
     }
 
     fn consume(self: Pin<&mut Self>, amt: usize) {
@@ -180,10 +193,15 @@ impl<D: Drive> AsyncWrite for File<D> {
     fn poll_write(mut self: Pin<&mut Self>, ctx: &mut Context<'_>, slice: &[u8]) -> Poll<io::Result<usize>> {
         self.as_mut().guard_op(Op::Write);
         let fd = self.fd;
-        let (ring, buf, pos) = self.split();
-        let data = ready!(buf.fill_buf(|mut buf| {
-            Poll::Ready(Ok(io::Write::write(&mut buf, slice)? as u32))
-        }))?;
+        let (mut ring, buf, pos) = self.split();
+        let data = unsafe { ready!(buf.fill_write_buf(ctx, ring.as_mut(), |_, _, buf| {
+            let buf: &mut [MaybeUninit<u8>] = buf.as_mut();
+            let n = cmp::min(slice.len(), buf.len());
+            let buf = &mut buf[..n];
+            let slice = &slice[..n];
+            mem::transmute::<_, &mut [u8]>(buf).copy_from_slice(slice);
+            Poll::Ready(Ok(n as u32))
+        }))? };
         let n = ready!(ring.poll(ctx, true, |sqe| unsafe { sqe.prep_write(fd, data, *pos) }))?;
         *pos += n;
         buf.clear();

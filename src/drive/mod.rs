@@ -1,6 +1,7 @@
 //! Drive IO on io-uring
 
 pub mod demo;
+mod buf;
 
 use std::io;
 use std::marker::PhantomData;
@@ -10,6 +11,7 @@ use std::task::{Context, Poll};
 use crate::completion;
 
 pub use crate::completion::complete;
+pub use buf::{ProvideBuffer, HeapBuffer};
 
 /// A ccompletion which will be used to wake the task waiting on this event.
 ///
@@ -31,7 +33,10 @@ impl<'cx> Completion<'cx> {
 /// The type that implements `Drive` is used to prepare and submit IO events to an io-uring
 /// instance. Paired with a piece of code which processes completions, it can run IO on top of
 /// io-uring.
-pub trait Drive {
+pub trait Drive: Sized {
+    type ReadBuf: ProvideBuffer<Self>;
+    type WriteBuf: ProvideBuffer<Self>;
+
     /// Prepare an event on the submission queue.
     ///
     /// The implementer is responsible for provisioning an [`iou::SubmissionQueueEvent`] from the
@@ -70,4 +75,20 @@ pub trait Drive {
         ctx: &mut Context<'_>,
         eager: bool,
     ) -> Poll<io::Result<usize>>;
+
+    fn poll_provide_read_buf(
+        self: Pin<&mut Self>,
+        ctx: &mut Context<'_>,
+        capacity: usize,
+    ) -> Poll<io::Result<Self::ReadBuf>> {
+        Self::ReadBuf::poll_provide(self, ctx, capacity)
+    }
+
+    fn poll_provide_write_buf(
+        self: Pin<&mut Self>,
+        ctx: &mut Context<'_>,
+        capacity: usize,
+    ) -> Poll<io::Result<Self::WriteBuf>> {
+        Self::WriteBuf::poll_provide(self, ctx, capacity)
+    }
 }
