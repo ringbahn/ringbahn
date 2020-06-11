@@ -29,6 +29,7 @@ pub struct Ring<D: Drive> {
     driver: D,
 }
 
+
 #[derive(Debug, Eq, PartialEq)]
 enum State {
     Inert = 0,
@@ -40,6 +41,12 @@ enum State {
 impl<D: Default + Drive> Default for Ring<D> {
     fn default() -> Ring<D> {
         Ring::new(D::default())
+    }
+}
+
+impl<D: Drive + Clone> Clone for Ring<D> {
+    fn clone(&self) -> Ring<D> {
+        Ring::new(self.driver.clone())
     }
 }
 

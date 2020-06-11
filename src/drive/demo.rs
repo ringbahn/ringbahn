@@ -30,6 +30,12 @@ impl Default for DemoDriver<'_> {
     }
 }
 
+impl<'a> Clone for DemoDriver<'a> {
+    fn clone(&self) -> DemoDriver<'a> {
+        driver()
+    }
+}
+
 impl Drive for DemoDriver<'_> {
     fn poll_prepare<'cx>(
         mut self: Pin<&mut Self>,

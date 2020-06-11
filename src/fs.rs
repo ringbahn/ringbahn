@@ -1,21 +1,18 @@
 //! Interact with the file system using io-uring
 
-use std::alloc::{alloc, dealloc, handle_alloc_error, Layout};
-use std::cmp;
 use std::fs;
 use std::future::Future;
 use std::io;
-use std::mem::{self, ManuallyDrop};
+use std::mem::ManuallyDrop;
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 use std::path::Path;
 use std::pin::Pin;
-use std::ptr;
-use std::slice;
 use std::task::{Context, Poll};
 
 use futures_core::ready;
 use futures_io::{AsyncRead, AsyncBufRead, AsyncWrite, AsyncSeek};
 
+use crate::buf::Buffer;
 use crate::drive::Drive;
 use crate::drive::demo::DemoDriver;
 use crate::ring::Ring;
@@ -126,11 +123,8 @@ impl<D: Drive> File<D> {
     /// the buffer is empty, it will just return an empty slice. This method can be used to copy
     /// out any left over buffered data before closing or performing a write.
     pub fn read_buffered(&self) -> &[u8] {
-        if self.active == Op::Read && self.buf.data != ptr::null_mut() {
-            unsafe {
-                let ptr = self.buf.data.offset(self.buf.consumed as isize);
-                slice::from_raw_parts(ptr, (self.buf.read - self.buf.consumed) as usize)
-            }
+        if self.active == Op::Read {
+            self.buf.buffered_from_read()
         } else { &[] }
     }
 
@@ -190,21 +184,13 @@ impl<D: Drive> AsyncRead for File<D> {
 impl<D: Drive> AsyncBufRead for File<D> {
     fn poll_fill_buf(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<io::Result<&[u8]>> {
         self.as_mut().guard_op(Op::Read);
-
         let fd = self.fd;
         let (ring, buf, pos) = self.split();
-
-        if buf.consumed >= buf.read {
-            buf.read = unsafe {
-                ready!(ring.poll(ctx, |sqe| sqe.prep_read(fd, buf.read_buf(), *pos)))? as u32
-            };
-            buf.consumed = 0;
-            *pos += buf.read as usize;
-        }
-
-        let consumed = buf.consumed as usize;
-        let read = buf.read as usize;
-        Poll::Ready(Ok(&buf.data()[consumed..read]))
+        buf.fill_buf(|buf| {
+            let n = ready!(ring.poll(ctx, |sqe| unsafe { sqe.prep_read(fd, buf, *pos) }))?;
+            *pos += n;
+            Poll::Ready(Ok(n as u32))
+        })
     }
 
     fn consume(self: Pin<&mut Self>, amt: usize) {
@@ -215,25 +201,15 @@ impl<D: Drive> AsyncBufRead for File<D> {
 impl<D: Drive> AsyncWrite for File<D> {
     fn poll_write(mut self: Pin<&mut Self>, ctx: &mut Context<'_>, slice: &[u8]) -> Poll<io::Result<usize>> {
         self.as_mut().guard_op(Op::Write);
-
         let fd = self.fd;
         let (ring, buf, pos) = self.split();
-
-        if buf.written == 0 {
-            buf.written = io::Write::write(&mut buf.data_mut(), slice).unwrap() as u32;
-        }
-
-        let result = ready!(ring.poll(ctx, |sqe| unsafe {
-            sqe.prep_write(fd, buf.write_buf(), *pos)
-        }));
-
-        if let &Ok(n) = &result {
-            *pos += n;
-        }
-
-        buf.written = 0;
-
-        Poll::Ready(result)
+        let data = ready!(buf.fill_buf(|mut buf| {
+            Poll::Ready(Ok(io::Write::write(&mut buf, slice)? as u32))
+        }))?;
+        let n = ready!(ring.poll(ctx, |sqe| unsafe { sqe.prep_write(fd, data, *pos) }))?;
+        *pos += n;
+        buf.clear();
+        Poll::Ready(Ok(n))
     }
 
     fn poll_flush(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<io::Result<()>> {
@@ -290,83 +266,6 @@ impl<D: Drive> Drop for File<D> {
         match self.active {
             Op::Nothing => unsafe { libc::close(self.fd); },
             _           => self.cancel(),
-        }
-    }
-}
-
-struct Buffer {
-    data: *mut u8,
-    capacity: u32,
-    consumed: u32,
-    read: u32,
-    written: u32,
-}
-
-impl Buffer {
-    fn new() -> Buffer {
-        let capacity = 4096 * 2;
-        let data = ptr::null_mut();
-
-        Buffer {
-            data, capacity,
-            consumed: 0,
-            read: 0,
-            written: 0,
-        }
-    }
-
-    fn read_buf(&mut self) -> &mut [u8] {
-        &mut self.data_mut()[..]
-    }
-
-    fn write_buf(&mut self) -> &mut [u8] {
-        let written = self.written as usize;
-        &mut self.data_mut()[..written]
-    }
-
-    fn consume(&mut self, amt: usize) {
-        self.consumed = cmp::min(self.consumed + amt as u32, self.read);
-    }
-
-    fn data(&mut self) -> &[u8] {
-        let data = self.lazy_alloc();
-        unsafe { slice::from_raw_parts(data, self.capacity as usize) }
-    }
-
-    fn data_mut(&mut self) -> &mut [u8] {
-        let data = self.lazy_alloc();
-        unsafe { slice::from_raw_parts_mut(data, self.capacity as usize) }
-    }
-
-    fn cancellation(&mut self) -> Cancellation {
-        let data = mem::replace(&mut self.data, ptr::null_mut());
-        unsafe { Cancellation::buffer(data, self.capacity as usize) }
-    }
-
-    #[inline(always)]
-    fn lazy_alloc(&mut self) -> *mut u8 {
-        if self.data == ptr::null_mut() {
-            let layout = Layout::array::<u8>(self.capacity as usize).unwrap();
-            let ptr = unsafe { alloc(layout) };
-            if ptr == ptr::null_mut() {
-                handle_alloc_error(layout);
-            }
-            self.data = ptr;
-        }
-
-        self.data
-    }
-}
-
-unsafe impl Send for Buffer { }
-unsafe impl Sync for Buffer { }
-
-impl Drop for Buffer {
-    fn drop(&mut self) {
-        if self.data != ptr::null_mut() {
-            unsafe {
-                dealloc(self.data, Layout::array::<u8>(self.capacity as usize).unwrap());
-            }
         }
     }
 }
