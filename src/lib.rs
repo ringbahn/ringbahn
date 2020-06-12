@@ -1,3 +1,5 @@
+#![feature(untagged_unions)]
+
 pub mod fs;
 pub mod drive;
 pub mod event;
