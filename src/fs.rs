@@ -37,44 +37,6 @@ enum Op {
     Statx,
 }
 
-/// A future representing an opening file.
-pub struct Open<D: Drive = DemoDriver<'static>>(Submission<OpenAt, D>);
-
-impl<D: Drive> Future for Open<D> {
-    type Output = io::Result<File<D>>;
-
-    fn poll(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<io::Result<File<D>>> {
-        let (_, driver, result) = ready!(self.inner().poll(ctx));
-        let fd = result? as i32;
-        Poll::Ready(Ok(File::from_fd(fd, driver)))
-    }
-}
-
-impl<D: Drive> Open<D> {
-    fn inner(self: Pin<&mut Self>) -> Pin<&mut Submission<OpenAt, D>> {
-        unsafe { Pin::map_unchecked_mut(self, |this| &mut this.0) }
-    }
-}
-
-/// A future representing a file being created.
-pub struct Create<D: Drive = DemoDriver<'static>>(Submission<OpenAt, D>);
-
-impl<D: Drive> Create<D> {
-    fn inner(self: Pin<&mut Self>) -> Pin<&mut Submission<OpenAt, D>> {
-        unsafe { Pin::map_unchecked_mut(self, |this| &mut this.0) }
-    }
-}
-
-impl<D: Drive> Future for Create<D> {
-    type Output = io::Result<File<D>>;
-
-    fn poll(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<io::Result<File<D>>> {
-        let (_, driver, result) = ready!(self.inner().poll(ctx));
-        let fd = result? as i32;
-        Poll::Ready(Ok(File::from_fd(fd, driver)))
-    }
-}
-
 impl File {
     /// Open a file using the default driver
     pub fn open(path: impl AsRef<Path>) -> Open {
@@ -87,7 +49,7 @@ impl File {
     }
 }
 
-impl<D: Drive> File<D> {
+impl<D: Drive + Clone> File<D> {
     /// Open a file
     pub fn open_on_driver(path: impl AsRef<Path>, driver: D) -> Open<D> {
         let flags = libc::O_CLOEXEC | libc::O_RDONLY;
@@ -101,7 +63,9 @@ impl<D: Drive> File<D> {
         let event = OpenAt::new(path, libc::AT_FDCWD, flags, 0o666);
         Create(Submission::new(event, driver))
     }
+}
 
+impl<D: Drive> File<D> {
     /// Take an existing file and run its IO on an io-uring driver
     pub fn run_on_driver(file: fs::File, driver: D) -> File<D> {
         let file = ManuallyDrop::new(file);
@@ -283,3 +247,46 @@ impl<D: Drive> Drop for File<D> {
         }
     }
 }
+
+/// A future representing an opening file.
+pub struct Open<D: Drive = DemoDriver<'static>>(Submission<OpenAt, D>);
+
+impl<D: Drive> Open<D> {
+    fn inner(self: Pin<&mut Self>) -> Pin<&mut Submission<OpenAt, D>> {
+        unsafe { Pin::map_unchecked_mut(self, |this| &mut this.0) }
+    }
+}
+
+impl<D: Drive + Clone> Future for Open<D> {
+    type Output = io::Result<File<D>>;
+
+    fn poll(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<io::Result<File<D>>> {
+        let mut inner = self.inner();
+        let (_, result) = ready!(inner.as_mut().poll(ctx));
+        let fd = result? as i32;
+        let driver = inner.driver().clone();
+        Poll::Ready(Ok(File::from_fd(fd, driver)))
+    }
+}
+
+/// A future representing a file being created.
+pub struct Create<D: Drive = DemoDriver<'static>>(Submission<OpenAt, D>);
+
+impl<D: Drive> Create<D> {
+    fn inner(self: Pin<&mut Self>) -> Pin<&mut Submission<OpenAt, D>> {
+        unsafe { Pin::map_unchecked_mut(self, |this| &mut this.0) }
+    }
+}
+
+impl<D: Drive + Clone> Future for Create<D> {
+    type Output = io::Result<File<D>>;
+
+    fn poll(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<io::Result<File<D>>> {
+        let mut inner = self.inner();
+        let (_, result) = ready!(inner.as_mut().poll(ctx));
+        let fd = result? as i32;
+        let driver = inner.driver().clone();
+        Poll::Ready(Ok(File::from_fd(fd, driver)))
+    }
+}
+
