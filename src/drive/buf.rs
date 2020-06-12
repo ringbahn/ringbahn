@@ -34,7 +34,7 @@ impl<D: Drive + ?Sized> ProvideBuffer<D> for HeapBuffer {
     fn poll_provide(_: Pin<&mut D>, _: &mut Context<'_>, capacity: usize)
         -> Poll<io::Result<Self>>
     {
-        assert!(capacity <= u32::MAX as usize);
+        let capacity = cmp::min(capacity, u32::MAX as usize);
         unsafe {
             let layout = Layout::array::<MaybeUninit<u8>>(capacity).unwrap();
             let ptr = alloc(layout);
