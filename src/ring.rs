@@ -131,7 +131,7 @@ impl<D: Drive> Ring<D> {
             Poll::Ready(result)
         } else {
             if let Some(completion) = &self.completion {
-                completion.set_waker(ctx.waker().clone());
+                completion.set_waker(ctx.waker());
             }
             Poll::Pending
         }

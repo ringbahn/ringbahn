@@ -71,12 +71,14 @@ impl Completion {
         }
     }
 
-    pub unsafe fn set_waker(&self, waker: Waker) {
+    pub unsafe fn set_waker(&self, waker: &Waker) {
         let state: &State = self.state.as_ref();
         if state.tag.compare_and_swap(SUBMITTED, UPDATING, SeqCst) == SUBMITTED {
             let old_waker = &mut (*state.data.get()).waker;
-            ManuallyDrop::drop(old_waker);
-            *old_waker = ManuallyDrop::new(waker);
+            if !old_waker.will_wake(waker) {
+                ManuallyDrop::drop(old_waker);
+                *old_waker = ManuallyDrop::new(waker.clone());
+            }
             state.tag.store(SUBMITTED, SeqCst);
         }
     }
