@@ -14,8 +14,8 @@ use crate::drive::Completion as ExternalCompletion;
 pub struct Submission<E: Event, D> {
     state: State,
     event: ManuallyDrop<E>,
-    driver: D,
     completion: Completion,
+    driver: D,
 }
 
 #[derive(Copy, Clone, Eq, PartialEq)]
@@ -71,7 +71,8 @@ impl<E: Event, D: Drive> Submission<E, D> {
         let this = Pin::get_unchecked_mut(self);
         if let Some(result) = this.completion.check() {
             this.state = State::Complete;
-            this.completion.deallocate();
+            let completion = mem::replace(&mut this.completion, Completion::dangling());
+            completion.deallocate();
             let event = ManuallyDrop::take(&mut this.event);
             Poll::Ready((event, result))
         } else {
@@ -143,7 +144,8 @@ impl<E: Event, D> Drop for Submission<E, D> {
     fn drop(&mut self) {
         unsafe {
             if matches!(self.state, State::Prepared | State::Submitted) {
-                self.completion.cancel(Event::cancellation(&mut self.event));
+                let completion = mem::replace(&mut self.completion, Completion::dangling());
+                completion.cancel(Event::cancellation(&mut self.event));
             } else if self.state == State::Waiting {
                 ManuallyDrop::drop(&mut self.event);
             }

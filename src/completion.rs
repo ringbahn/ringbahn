@@ -36,7 +36,7 @@ impl Completion {
         }
     }
 
-    pub(crate) unsafe fn deallocate(&self) {
+    pub(crate) unsafe fn deallocate(self) {
         drop(Box::from_raw(self.state.as_ptr()));
     }
 
@@ -51,7 +51,7 @@ impl Completion {
         }
     }
 
-    pub(crate) unsafe fn cancel(&self, mut callback: Cancellation) {
+    pub(crate) unsafe fn cancel(self, mut callback: Cancellation) {
         let mut state = self.state.as_ref().lock();
         if matches!(&*state, State::Completed(_)) {
             drop(state);
