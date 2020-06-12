@@ -33,7 +33,7 @@ impl<'cx> Completion<'cx> {
 /// The type that implements `Drive` is used to prepare and submit IO events to an io-uring
 /// instance. Paired with a piece of code which processes completions, it can run IO on top of
 /// io-uring.
-pub trait Drive: Sized {
+pub trait Drive {
     type ReadBuf: ProvideBuffer<Self>;
     type WriteBuf: ProvideBuffer<Self>;
 

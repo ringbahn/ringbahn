@@ -10,9 +10,10 @@ use std::slice;
 use crate::Cancellation;
 use super::Drive;
 
-pub trait ProvideBuffer<D: Drive>: Sized {
+pub trait ProvideBuffer<D: Drive + ?Sized> {
     fn poll_provide(driver: Pin<&mut D>, ctx: &mut Context<'_>, capacity: usize)
-        -> Poll<io::Result<Self>>;
+        -> Poll<io::Result<Self>>
+    where Self: Sized;
 
     unsafe fn fill(&mut self, data: &[u8]);
     unsafe fn as_slice(&self) -> &[MaybeUninit<u8>];
@@ -29,7 +30,7 @@ pub struct HeapBuffer {
     capacity: u32,
 }
 
-impl<D: Drive> ProvideBuffer<D> for HeapBuffer {
+impl<D: Drive + ?Sized> ProvideBuffer<D> for HeapBuffer {
     fn poll_provide(_: Pin<&mut D>, _: &mut Context<'_>, capacity: usize)
         -> Poll<io::Result<Self>>
     {
