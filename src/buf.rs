@@ -104,8 +104,12 @@ impl<D: Drive> Buffer<D> {
 
     pub fn cancellation(&mut self) -> Cancellation {
         let cancellation = match &mut self.storage {
-            Storage::Read(buf)      => unsafe { ProvideBuffer::cleanup(buf) },
-            Storage::Write(buf)     => unsafe { ProvideBuffer::cleanup(buf) },
+            Storage::Read(buf)      => unsafe {
+                ProvideBuffer::cleanup(ManuallyDrop::new(ManuallyDrop::take(buf)))
+            }
+            Storage::Write(buf)     => unsafe {
+                ProvideBuffer::cleanup(ManuallyDrop::new(ManuallyDrop::take(buf)))
+            }
             Storage::Statx(statx)   => {
                 unsafe fn callback(statx: *mut (), _: usize) {
                     dealloc(statx as *mut u8, Layout::new::<libc::statx>())

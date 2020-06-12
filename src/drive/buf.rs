@@ -10,18 +10,58 @@ use std::slice;
 use crate::Cancellation;
 use super::Drive;
 
+/// Provide buffers for use in IO with io-uring.
 pub trait ProvideBuffer<D: Drive + ?Sized> {
+    /// Constructor for a buffer that IO will be performed into. It is possible to implement
+    /// backpressure or generate an IO error, depending on how your buffer management system works.
+    ///
+    /// The capacity argument is a request from the client for buffers of a particular capacity,
+    /// but implementers are not required to return a buffer with that capacity. It's merely a hint
+    /// at what the client would prefer.
     fn poll_provide(driver: Pin<&mut D>, ctx: &mut Context<'_>, capacity: usize)
         -> Poll<io::Result<Self>>
     where Self: Sized;
 
+    /// Fill the buffer with data.
+    ///
+    /// ## Safety
+    ///
+    /// This API is unsafe. Callers must guarantee that this buffer has not been prepared into an
+    /// active SQE when this method is called. The implementer can assume that it has not been.
     unsafe fn fill(&mut self, data: &[u8]);
+
+    /// Return the underlying data in the buffer.
+    ///
+    /// ## Safety
+    ///
+    /// This API is unsafe. Callers must guarantee that this buffer has not been prepared into an
+    /// active SQE when this method is called. The implementer can assume that it has not been.
     unsafe fn as_slice(&self) -> &[MaybeUninit<u8>];
 
+    /// Prepare a read using this buffer.
+    ///
+    /// The implementer is expected to set all of the data necessary to perform a read with this
+    /// type of buffer. This include setting the addr, len, and op fields, for example.
+    /// 
+    /// ## Safety
+    /// 
+    /// Similar to `Event::prepare`, callers guarantee that this buffer will not be accessed again
+    /// until after this SQE has been completed.
     unsafe fn prepare_read(&mut self, sqe: &mut iou::SubmissionQueueEvent<'_>);
+
+    /// Prepare a write using this buffer.
+    ///
+    /// The implementer is expected to set all of the data necessary to perform a write with this
+    /// type of buffer. This include setting the addr, len, and op fields, for example.
+    /// 
+    /// ## Safety
+    /// 
+    /// Similar to `Event::prepare`, callers guarantee that this buffer will not be accessed again
+    /// until after this SQE has been completed.
     unsafe fn prepare_write(&mut self, sqe: &mut iou::SubmissionQueueEvent<'_>);
 
-    unsafe fn cleanup(this: &mut ManuallyDrop<Self>) -> Cancellation;
+    /// Construct a cancellation to clean up this buffer.
+    fn cleanup(this: ManuallyDrop<Self>) -> Cancellation;
 }
 
 pub struct HeapBuffer {
@@ -76,8 +116,8 @@ impl<D: Drive + ?Sized> ProvideBuffer<D> for HeapBuffer {
         sqe.cmd_flags.rw_flags = 0;
     }
 
-    unsafe fn cleanup(this: &mut ManuallyDrop<Self>) -> Cancellation {
-        Cancellation::buffer(this.data.cast().as_ptr(), this.capacity as usize)
+    fn cleanup(this: ManuallyDrop<Self>) -> Cancellation {
+        unsafe { Cancellation::buffer(this.data.cast().as_ptr(), this.capacity as usize) }
     }
 }
 
