@@ -1,7 +1,5 @@
-use std::cmp;
 use std::io;
 use std::future::Future;
-use std::mem::{self, MaybeUninit};
 use std::net::ToSocketAddrs;
 use std::os::unix::io::RawFd;
 use std::pin::Pin;
@@ -135,15 +133,9 @@ impl<D: Drive> AsyncBufRead for TcpStream<D> {
         unsafe {
             buf.fill_read_buf(ctx, ring, |ring, ctx, buf| {
                 let n = ready!(ring.poll(ctx, true, |sqe| {
-                    buf.prepare(sqe);
-                    let sqe = sqe.raw_mut();
-                    sqe.opcode = uring_sys::IoRingOp::IORING_OP_READ as u8;
-                    sqe.flags = 0;
-                    sqe.ioprio = 0;
-                    sqe.fd = fd;
-                    sqe.off_addr2.off = 0;
-                    sqe.cmd_flags.rw_flags = 0;
-                    sqe.user_data = 0;
+                    buf.prepare_read(sqe);
+                    sqe.raw_mut().fd = fd;
+                    sqe.raw_mut().off_addr2.off = 0;
                 }))?;
                 Poll::Ready(Ok(n as u32))
             })
@@ -160,15 +152,12 @@ impl<D: Drive> AsyncWrite for TcpStream<D> {
         self.as_mut().guard_op(Op::Write);
         let fd = self.fd;
         let (mut ring, buf) = self.split();
-        let data = unsafe { ready!(buf.fill_write_buf(ctx, ring.as_mut(), |_, _, buf| {
-            let buf: &mut [MaybeUninit<u8>] = buf.as_mut();
-            let n = cmp::min(slice.len(), buf.len());
-            let buf = &mut buf[..n];
-            let slice = &slice[..n];
-            mem::transmute::<_, &mut [u8]>(buf).copy_from_slice(slice);
-            Poll::Ready(Ok(n as u32))
-        }))? };
-        let n = ready!(ring.poll(ctx, true, |sqe| unsafe { sqe.prep_write(fd, data, 0) }))?;
+        let data = ready!(buf.fill_write_buf(ctx, ring.as_mut(), slice))?;
+        let n = ready!(ring.poll(ctx, true, |sqe| unsafe {
+            data.prepare_write(sqe);
+            sqe.raw_mut().fd = fd;
+            sqe.raw_mut().off_addr2.off = 0;
+        }))?;
         buf.clear();
         Poll::Ready(Ok(n))
     }

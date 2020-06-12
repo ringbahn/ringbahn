@@ -2,7 +2,7 @@ use std::alloc::{alloc, dealloc, handle_alloc_error, Layout};
 use std::io;
 use std::cmp;
 use std::pin::Pin;
-use std::mem::{self, MaybeUninit, ManuallyDrop};
+use std::mem::{MaybeUninit, ManuallyDrop};
 use std::task::{Poll, Context};
 use std::slice;
 
@@ -35,17 +35,11 @@ impl<D: Drive> Buffer<D> {
 
     pub fn buffered_from_read(&self) -> &[u8] {
         if let Storage::Read(buf) = &self.storage {
-            let ptr: *mut u8 = buf.as_ref().as_ptr() as *mut u8;
-            let cap = (self.cap - self.pos) as usize;
-            unsafe { slice::from_raw_parts(ptr.offset(self.pos as isize), cap) }
-        } else {
-            &[]
-        }
-    }
-
-    fn buffered_from_write(&self) -> &[u8] {
-        if let Storage::Write(buf) = &self.storage {
-            unsafe { mem::transmute(&buf.as_ref()[0..self.pos as usize]) }
+            unsafe {
+                let ptr: *mut u8 = buf.as_slice().as_ptr() as *mut u8;
+                let cap = (self.cap - self.pos) as usize;
+                slice::from_raw_parts(ptr.offset(self.pos as isize), cap)
+            }
         } else {
             &[]
         }
@@ -59,6 +53,9 @@ impl<D: Drive> Buffer<D> {
         mut ring: Pin<&mut Ring<D>>,
         fill: impl FnOnce(Pin<&mut Ring<D>>, &mut Context<'_>, &mut D::ReadBuf) -> Poll<io::Result<u32>>
     ) -> Poll<io::Result<&[u8]>> {
+        if matches!(self.storage, Storage::Empty) {
+            ready!(self.alloc_read_buf(ctx, ring.as_mut()))?;
+        }
         match &mut self.storage {
             Storage::Read(buf)  => {
                 if self.pos >= self.cap {
@@ -66,16 +63,6 @@ impl<D: Drive> Buffer<D> {
                     self.pos = 0;
                 }
                 Poll::Ready(Ok(self.buffered_from_read()))
-            }
-            Storage::Empty      => {
-                ready!(self.alloc_read_buf(ctx, ring.as_mut()))?;
-                if let Storage::Read(buf) = &mut self.storage {
-                    if self.pos >= self.cap {
-                        self.pos = ready!(fill(ring, ctx, &mut *buf))?;
-                        self.cap = 0;
-                    }
-                    Poll::Ready(Ok(self.buffered_from_read()))
-                } else { unreachable!() }
             }
             _                   => panic!("attempted to fill read buf while holding other buf"),
         }
@@ -86,23 +73,18 @@ impl<D: Drive> Buffer<D> {
         &mut self,
         ctx: &mut Context<'_>,
         mut ring: Pin<&mut Ring<D>>,
-        fill: impl FnOnce(Pin<&mut Ring<D>>, &mut Context<'_>, &mut D::WriteBuf) -> Poll<io::Result<u32>>
-    ) -> Poll<io::Result<&[u8]>> {
+        data: &[u8],
+    ) -> Poll<io::Result<&mut D::WriteBuf>> {
+        if matches!(self.storage, Storage::Empty) {
+            ready!(self.alloc_write_buf(ctx, ring.as_mut()))?;
+        }
         match &mut self.storage {
             Storage::Write(buf)  => {
                 if self.pos == 0 {
-                    self.pos = ready!(fill(ring, ctx, &mut *buf))?;
+                    unsafe { buf.fill(data) };
+                    self.pos = 1;
                 }
-                Poll::Ready(Ok(self.buffered_from_write()))
-            }
-            Storage::Empty      => {
-                ready!(self.alloc_write_buf(ctx, ring.as_mut()))?;
-                if let Storage::Write(buf) = &mut self.storage {
-                    if self.pos == 0 {
-                        self.pos = ready!(fill(ring, ctx, &mut *buf))?;
-                    }
-                    Poll::Ready(Ok(self.buffered_from_write()))
-                } else { unreachable!() }
+                Poll::Ready(Ok(&mut *buf))
             }
             _                   => panic!("attempted to fill read buf while holding other buf"),
         }

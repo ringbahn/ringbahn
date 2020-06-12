@@ -1,4 +1,5 @@
 use std::alloc::{alloc, dealloc, handle_alloc_error, Layout};
+use std::cmp;
 use std::io;
 use std::mem::{MaybeUninit, ManuallyDrop};
 use std::pin::Pin;
@@ -9,32 +10,23 @@ use std::slice;
 use crate::Cancellation;
 use super::Drive;
 
-pub trait ProvideBuffer<D: Drive>: AsRef<[MaybeUninit<u8>]> + AsMut<[MaybeUninit<u8>]> + Sized {
+pub trait ProvideBuffer<D: Drive>: Sized {
     fn poll_provide(driver: Pin<&mut D>, ctx: &mut Context<'_>, capacity: usize)
         -> Poll<io::Result<Self>>;
-    unsafe fn prepare(&mut self, sqe: &mut iou::SubmissionQueueEvent<'_>);
+
+    unsafe fn fill(&mut self, data: &[u8]);
+    unsafe fn as_slice(&self) -> &[MaybeUninit<u8>];
+
+    unsafe fn prepare_read(&mut self, sqe: &mut iou::SubmissionQueueEvent<'_>);
+    unsafe fn prepare_write(&mut self, sqe: &mut iou::SubmissionQueueEvent<'_>);
+
     unsafe fn cleanup(this: &mut ManuallyDrop<Self>) -> Cancellation;
 }
 
 pub struct HeapBuffer {
     data: NonNull<MaybeUninit<u8>>,
+    filled: u32,
     capacity: u32,
-}
-
-impl AsRef<[MaybeUninit<u8>]> for HeapBuffer {
-    fn as_ref(&self) -> &[MaybeUninit<u8>] {
-        unsafe {
-            slice::from_raw_parts(self.data.as_ptr(), self.capacity as usize)
-        }
-    }
-}
-
-impl AsMut<[MaybeUninit<u8>]> for HeapBuffer {
-    fn as_mut(&mut self) -> &mut [MaybeUninit<u8>] {
-        unsafe {
-            slice::from_raw_parts_mut(self.data.as_ptr(), self.capacity as usize)
-        }
-    }
 }
 
 impl<D: Drive> ProvideBuffer<D> for HeapBuffer {
@@ -50,14 +42,37 @@ impl<D: Drive> ProvideBuffer<D> for HeapBuffer {
             }
             Poll::Ready(Ok(HeapBuffer {
                 data: NonNull::new_unchecked(ptr).cast(),
-                capacity: capacity as u32
+                capacity: capacity as u32,
+                filled: 0,
             }))
         }
     }
-    
-    unsafe fn prepare(&mut self, sqe: &mut iou::SubmissionQueueEvent<'_>) {
-        sqe.raw_mut().addr = self.data.as_ptr() as usize as u64;
-        sqe.raw_mut().len = self.capacity;
+
+    unsafe fn fill(&mut self, data: &[u8]) {
+        let n = cmp::min(data.len(), self.capacity as usize);
+        let slice = slice::from_raw_parts_mut(self.data.cast().as_ptr(), n);
+        slice.copy_from_slice(&data[..n]);
+        self.filled = n as u32;
+    }
+
+    unsafe fn as_slice(&self) -> &[MaybeUninit<u8>] {
+        slice::from_raw_parts(self.data.as_ptr(), self.capacity as usize)
+    }
+
+    unsafe fn prepare_read(&mut self, sqe: &mut iou::SubmissionQueueEvent<'_>) {
+        let sqe = sqe.raw_mut();
+        sqe.addr = self.data.as_ptr() as usize as u64;
+        sqe.len = self.capacity;
+        sqe.opcode = uring_sys::IoRingOp::IORING_OP_READ as u8;
+        sqe.cmd_flags.rw_flags = 0;
+    }
+
+    unsafe fn prepare_write(&mut self, sqe: &mut iou::SubmissionQueueEvent<'_>) {
+        let sqe = sqe.raw_mut();
+        sqe.addr = self.data.as_ptr() as usize as u64;
+        sqe.len = self.filled;
+        sqe.opcode = uring_sys::IoRingOp::IORING_OP_WRITE as u8;
+        sqe.cmd_flags.rw_flags = 0;
     }
 
     unsafe fn cleanup(this: &mut ManuallyDrop<Self>) -> Cancellation {
