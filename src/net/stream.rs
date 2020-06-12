@@ -37,7 +37,7 @@ impl TcpStream {
     }
 }
 
-impl<D: Drive> TcpStream<D> {
+impl<D: Drive + Clone> TcpStream<D> {
     pub fn connect_on_driver<A: ToSocketAddrs>(addr: A, driver: D) -> Connect<D> {
         let (fd, addr) = match socket(addr) {
             Ok(fd)  => fd,
@@ -45,7 +45,9 @@ impl<D: Drive> TcpStream<D> {
         };
         Connect(Ok(Submission::new(event::Connect::new(fd, addr), driver)))
     }
+}
 
+impl<D: Drive> TcpStream<D> {
     pub(super) fn from_fd(fd: RawFd, ring: Ring<D>) -> TcpStream<D> {
         TcpStream {
             buf: Buffer::new(),
@@ -90,18 +92,20 @@ pub struct Connect<D: Drive = DemoDriver<'static>>(
     Result<Submission<event::Connect, D>, Option<io::Error>>
 );
 
-impl<D: Drive> Future for Connect<D> {
+impl<D: Drive + Clone> Future for Connect<D> {
     type Output = io::Result<TcpStream<D>>;
 
     fn poll(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<Self::Output> {
         unsafe {
             match &mut Pin::get_unchecked_mut(self).0 {
-                Ok(future)  => {
-                    let (connect, driver, result) = ready!(Pin::new_unchecked(future).poll(ctx));
+                Ok(submission)  => {
+                    let mut submission = Pin::new_unchecked(submission);
+                    let (connect, result) = ready!(submission.as_mut().poll(ctx));
                     result?;
+                    let driver = submission.driver().clone();
                     Poll::Ready(Ok(TcpStream::from_fd(connect.fd, Ring::new(driver))))
                 }
-                Err(err)    => {
+                Err(err)        => {
                     let err = err.take().expect("polled Connect future after completion");
                     Poll::Ready(Err(err))
                 }

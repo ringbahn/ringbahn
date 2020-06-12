@@ -14,7 +14,7 @@ use crate::drive::Completion as ExternalCompletion;
 pub struct Submission<E: Event, D> {
     state: State,
     event: ManuallyDrop<E>,
-    driver: ManuallyDrop<D>,
+    driver: D,
     completion: Completion,
 }
 
@@ -33,15 +33,20 @@ impl<E: Event, D: Drive> Submission<E, D> {
         Submission {
             state: State::Waiting,
             event: ManuallyDrop::new(event),
-            driver: ManuallyDrop::new(driver),
             completion: Completion::dangling(),
+            driver,
         }
+    }
+
+    /// Access the driver this submission is using
+    pub fn driver(&self) -> &D {
+        &self.driver
     }
 
     #[inline(always)]
     unsafe fn try_prepare(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<()> {
         let this = Pin::get_unchecked_mut(self);
-        let driver = Pin::new_unchecked(&mut *this.driver);
+        let driver = Pin::new_unchecked(&mut this.driver);
         let event = &mut *this.event;
         let state = &mut this.state;
         let completion = ready!(driver.poll_prepare(ctx, |sqe, ctx| {
@@ -62,14 +67,13 @@ impl<E: Event, D: Drive> Submission<E, D> {
     }
 
     #[inline(always)]
-    unsafe fn try_complete(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<(E, D, io::Result<usize>)> {
+    unsafe fn try_complete(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<(E, io::Result<usize>)> {
         let this = Pin::get_unchecked_mut(self);
         if let Some(result) = this.completion.check() {
             this.state = State::Complete;
             this.completion.deallocate();
             let event = ManuallyDrop::take(&mut this.event);
-            let driver = ManuallyDrop::take(&mut this.driver);
-            Poll::Ready((event, driver, result))
+            Poll::Ready((event, result))
         } else {
             this.completion.set_waker(ctx.waker().clone());
             Poll::Pending
@@ -80,7 +84,7 @@ impl<E: Event, D: Drive> Submission<E, D> {
     fn event_and_driver(self: Pin<&mut Self>) -> (&mut E, Pin<&mut D>) {
         unsafe {
             let this: &mut Submission<E, D> = Pin::get_unchecked_mut(self);
-            (&mut this.event, Pin::new_unchecked(&mut *this.driver))
+            (&mut this.event, Pin::new_unchecked(&mut this.driver))
         }
     }
 }
@@ -89,7 +93,7 @@ impl<E, D> Future for Submission<E, D> where
     E: Event,
     D: Drive,
 {
-    type Output = (E, D, io::Result<usize>);
+    type Output = (E, io::Result<usize>);
 
     fn poll(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<Self::Output> {
         unsafe {
@@ -142,10 +146,6 @@ impl<E: Event, D> Drop for Submission<E, D> {
                 self.completion.cancel(Event::cancellation(&mut self.event));
             } else if self.state == State::Waiting {
                 ManuallyDrop::drop(&mut self.event);
-            }
-
-            if self.state != State::Complete {
-                ManuallyDrop::drop(&mut self.driver);
             }
         }
     }
