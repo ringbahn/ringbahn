@@ -10,7 +10,7 @@ const ASSERT: &[u8] = b"But this formidable power of death -";
 #[test]
 fn write_file() {
     let mut file = tempfile::tempfile().unwrap();
-    let write: Write<'_, File> = Write::new(&mut file, Vec::from(ASSERT));
+    let write: Write<'_, File> = Write::new(&file, Vec::from(ASSERT), 0);
     let (_, result) = futures::executor::block_on(Submission::new(write, demo::driver()));
     assert_eq!(result.unwrap(), ASSERT.len());
 
