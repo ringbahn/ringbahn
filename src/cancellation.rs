@@ -23,6 +23,8 @@ impl Cancellation {
     /// function. Therefore, whatever invariants are necessary to safely call `drop` (such as
     /// exclusive ownership of some heap allocated data) must met when the cancellation is dropped
     /// as well.
+    ///
+    /// It must be safe to send the Cancellation type and references to it between threads.
     pub unsafe fn new(data: *mut (), metadata: usize, drop: unsafe fn(*mut (), usize))
         -> Cancellation
     {
@@ -44,6 +46,9 @@ impl Cancellation {
         Cancellation::new(data as *mut (), len, drop)
     }
 }
+
+unsafe impl Send for Cancellation { }
+unsafe impl Sync for Cancellation { }
 
 impl Drop for Cancellation {
     fn drop(&mut self) {
