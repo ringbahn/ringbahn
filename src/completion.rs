@@ -2,7 +2,8 @@ use std::cell::UnsafeCell;
 use std::io;
 use std::mem::{self, ManuallyDrop};
 use std::ptr::{self, NonNull};
-use std::sync::atomic::{self, AtomicUsize, Ordering::SeqCst};
+use std::sync::atomic::{self, AtomicUsize};
+use std::sync::atomic::Ordering::{Acquire, Release};
 use std::task::Waker;
 use std::thread;
 
@@ -82,7 +83,7 @@ impl Completion {
             let state: &State = self.state.as_ref();
             let mut waiter = Waiter::default();
             loop {
-                match state.tag.compare_and_swap(SUBMITTED, UPDATING, SeqCst) {
+                match state.tag.compare_and_swap(SUBMITTED, UPDATING, Acquire) {
                     // In the updating state, wait for the lock to be released.
                     UPDATING    => waiter.wait(),
 
@@ -140,7 +141,7 @@ impl Completion {
             let state: &State = self.state.as_ref();
             let mut waiter = Waiter::default();
             loop {
-                match state.tag.compare_and_swap(SUBMITTED, UPDATING, SeqCst) {
+                match state.tag.compare_and_swap(SUBMITTED, UPDATING, Acquire) {
                     // In the updating state, wait for the lock to be released.
                     UPDATING    => waiter.wait(),
 
@@ -155,7 +156,7 @@ impl Completion {
                         // We release the lock before dropping the waker, to reduce the length of
                         // the critical section and to avoid concern about panics in the Waker's
                         // drop function.
-                        state.tag.store(CANCELLED, SeqCst);
+                        state.tag.store(CANCELLED, Release);
 
                         drop(ManuallyDrop::into_inner(waker));
                         return;
@@ -183,7 +184,7 @@ unsafe impl Sync for Completion { }
 impl Drop for State {
     fn drop(&mut self) {
         unsafe {
-            match self.tag.load(SeqCst) {
+            match self.tag.load(Acquire) {
                 // Safe because we know we are in the cancelled state and we are being dropped.
                 CANCELLED   => ManuallyDrop::drop(&mut (*self.data.get()).callback),
 
@@ -218,7 +219,7 @@ pub unsafe fn complete(cqe: iou::CompletionQueueEvent) {
         let state: &State = &*completion;
         let mut waiter = Waiter::default();
         loop {
-            match state.tag.compare_and_swap(SUBMITTED, UPDATING, SeqCst) {
+            match state.tag.compare_and_swap(SUBMITTED, UPDATING, Acquire) {
                 // In the updating state, wait for the lock to be released.
                 UPDATING    => waiter.wait(),
 
@@ -230,7 +231,7 @@ pub unsafe fn complete(cqe: iou::CompletionQueueEvent) {
 
                     // We unlock before we wake so that we don't have to worry about panics and we
                     // reduce the length of the critical section
-                    state.tag.store(COMPLETED, SeqCst);
+                    state.tag.store(COMPLETED, Release);
                     ManuallyDrop::into_inner(waker).wake();
                     return;
                 }
@@ -275,6 +276,6 @@ struct Unlocker<'a> {
 
 impl<'a> Drop for Unlocker<'a> {
     fn drop(&mut self) {
-        self.tag.store(SUBMITTED, SeqCst);
+        self.tag.store(SUBMITTED, Release);
     }
 }
