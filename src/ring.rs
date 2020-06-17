@@ -7,7 +7,7 @@ use futures_core::ready;
 use crate::completion::Completion;
 use crate::drive::Completion as ExternalCompletion;
 use crate::drive::Drive;
-use crate::event::Cancellation;
+use crate::Cancellation;
 
 use State::*;
 
@@ -125,15 +125,15 @@ impl<D: Drive> Ring<D> {
 
     #[inline(always)]
     unsafe fn try_complete(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<io::Result<usize>> {
-        if let Some(result) = self.completion.as_ref().and_then(|c| c.check()) {
-            *self.as_mut().state() = Inert;
-            self.as_mut().completion().take().unwrap().deallocate();
-            Poll::Ready(result)
-        } else {
-            if let Some(completion) = &self.completion {
-                completion.set_waker(ctx.waker());
+        match self.as_mut().completion().take().unwrap().check(ctx.waker()) {
+            Ok(result)      => {
+                *self.state() = Inert;
+                Poll::Ready(result)
             }
-            Poll::Pending
+            Err(completion) => {
+                *self.completion() = Some(completion);
+                Poll::Pending
+            }
         }
     }
 
@@ -142,12 +142,9 @@ impl<D: Drive> Ring<D> {
     /// Users are responsible for ensuring that the cancellation passed would be appropriate to
     /// clean up the resources of the running event.
     #[inline]
-    pub fn cancel(&mut self, mut cancellation: Cancellation) {
-        unsafe {
-            match self.completion.take() {
-                Some(completion)    => completion.cancel(cancellation),
-                None                => cancellation.cancel(),
-            }
+    pub fn cancel(&mut self, cancellation: Cancellation) {
+        if let Some(completion) = self.completion.take() {
+            completion.cancel(cancellation);
         }
     }
 

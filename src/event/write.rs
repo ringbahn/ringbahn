@@ -21,11 +21,9 @@ impl<'a, T: AsRawFd + Unpin> Event for Write<'a, T> {
         sqe.prep_write(self.io.as_raw_fd(), self.buf.as_ref(), 0);
     }
 
-    fn cancellation(this: &mut ManuallyDrop<Self>) -> Cancellation {
-        unsafe {
-            let mut buf: ManuallyDrop<Vec<u8>> = ManuallyDrop::new(ManuallyDrop::take(this).buf);
-            let cap = buf.capacity();
-            Cancellation::buffer(buf.as_mut_ptr(), cap)
-        }
+    unsafe fn cancel(this: &mut ManuallyDrop<Self>) -> Cancellation {
+        let mut buf: ManuallyDrop<Vec<u8>> = ManuallyDrop::new(ManuallyDrop::take(this).buf);
+        let cap = buf.capacity();
+        Cancellation::buffer(buf.as_mut_ptr(), cap)
     }
 }

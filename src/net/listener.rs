@@ -11,7 +11,7 @@ use std::task::{Context, Poll};
 use futures_core::{ready, Stream};
 
 use crate::drive::demo::DemoDriver;
-use crate::event::Cancellation;
+use crate::Cancellation;
 use crate::{Drive, Ring};
 
 use super::{TcpStream, addr_from_c, addr_to_c, socket};
@@ -89,7 +89,9 @@ impl<D: Drive> TcpListener<D> {
                     dealloc(addr as *mut u8, Layout::new::<libc::sockaddr_storage>());
                     dealloc(addrlen as *mut u8, Layout::new::<libc::socklen_t>());
                 }
-                Cancellation::new(self.addr as *mut (), self.len as usize, callback)
+                unsafe {
+                    Cancellation::new(self.addr as *mut (), self.len as usize, callback)
+                }
             }
             Op::Close   => Cancellation::null(),
             Op::Nothing => return,

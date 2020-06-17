@@ -21,11 +21,9 @@ impl<'a, T: AsRawFd + Unpin> Event for Read<'a, T> {
         sqe.prep_read(self.io.as_raw_fd(), &mut self.buf[..], 0);
     }
 
-    fn cancellation(this: &mut ManuallyDrop<Self>) -> Cancellation {
-        unsafe {
-            let mut buf: ManuallyDrop<Vec<u8>> = ManuallyDrop::new(ManuallyDrop::take(this).buf);
-            let cap = buf.capacity();
-            Cancellation::buffer(buf.as_mut_ptr(), cap)
-        }
+    unsafe fn cancel(this: &mut ManuallyDrop<Self>) -> Cancellation {
+        let mut buf: ManuallyDrop<Vec<u8>> = ManuallyDrop::new(ManuallyDrop::take(this).buf);
+        let cap = buf.capacity();
+        Cancellation::buffer(buf.as_mut_ptr(), cap)
     }
 }

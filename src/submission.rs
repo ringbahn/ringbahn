@@ -14,7 +14,7 @@ use crate::drive::Completion as ExternalCompletion;
 pub struct Submission<E: Event, D> {
     state: State,
     event: ManuallyDrop<E>,
-    completion: Completion,
+    completion: Option<Completion>,
     driver: D,
 }
 
@@ -33,7 +33,7 @@ impl<E: Event, D: Drive> Submission<E, D> {
         Submission {
             state: State::Waiting,
             event: ManuallyDrop::new(event),
-            completion: Completion::dangling(),
+            completion: None,
             driver,
         }
     }
@@ -53,7 +53,7 @@ impl<E: Event, D: Drive> Submission<E, D> {
             prepare(sqe, ctx, event, state)
         }));
         *state = State::Prepared;
-        this.completion = completion.real;
+        this.completion = Some(completion.real);
         Poll::Ready(())
     }
 
@@ -69,15 +69,16 @@ impl<E: Event, D: Drive> Submission<E, D> {
     #[inline(always)]
     unsafe fn try_complete(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<(E, io::Result<usize>)> {
         let this = Pin::get_unchecked_mut(self);
-        if let Some(result) = this.completion.check() {
-            this.state = State::Complete;
-            let completion = mem::replace(&mut this.completion, Completion::dangling());
-            completion.deallocate();
-            let event = ManuallyDrop::take(&mut this.event);
-            Poll::Ready((event, result))
-        } else {
-            this.completion.set_waker(ctx.waker());
-            Poll::Pending
+        match this.completion.take().unwrap().check(ctx.waker()) {
+            Ok(result)  => {
+                this.state = State::Complete;
+                let event = ManuallyDrop::take(&mut this.event);
+                Poll::Ready((event, result))
+            }
+            Err(completion) => {
+                this.completion = Some(completion);
+                Poll::Pending
+            }
         }
     }
 
@@ -144,8 +145,7 @@ impl<E: Event, D> Drop for Submission<E, D> {
     fn drop(&mut self) {
         unsafe {
             if matches!(self.state, State::Prepared | State::Submitted) {
-                let completion = mem::replace(&mut self.completion, Completion::dangling());
-                completion.cancel(Event::cancellation(&mut self.event));
+                self.completion.take().unwrap().cancel(E::cancel(&mut self.event));
             } else if self.state == State::Waiting {
                 ManuallyDrop::drop(&mut self.event);
             }
