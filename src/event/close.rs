@@ -18,7 +18,7 @@ impl Event for Close {
         uring_sys::io_uring_prep_close(sqe.raw_mut(), self.fd)
     }
 
-    fn cancellation(_: &mut ManuallyDrop<Self>) -> Cancellation {
+    unsafe fn cancel(_: &mut ManuallyDrop<Self>) -> Cancellation {
         Cancellation::null()
     }
 }

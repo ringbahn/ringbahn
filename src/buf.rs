@@ -7,7 +7,7 @@ use std::slice;
 use std::task::Poll;
 
 use futures_core::ready;
-use crate::event::Cancellation;
+use crate::Cancellation;
 
 pub struct Buffer {
     data: NonNull<()>,
@@ -98,7 +98,9 @@ impl Buffer {
 
                 self.storage = Storage::Nothing;
                 let data = mem::replace(&mut self.data, NonNull::dangling());
-                Cancellation::new(data.cast().as_ptr(), 0, callback)
+                unsafe {
+                    Cancellation::new(data.cast().as_ptr(), 0, callback)
+                }
             }
             Storage::Nothing    => Cancellation::null(),
         }

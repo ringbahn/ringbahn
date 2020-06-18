@@ -11,7 +11,7 @@ use std::task::{Context, Poll};
 use futures_core::{ready, Stream};
 
 use crate::drive::demo::DemoDriver;
-use crate::event::Cancellation;
+use crate::Cancellation;
 use crate::{Drive, Ring};
 
 use super::{TcpStream, addr_from_c, addr_to_c, socket};
@@ -89,7 +89,9 @@ impl<D: Drive> TcpListener<D> {
                     dealloc(addr as *mut u8, Layout::new::<libc::sockaddr_storage>());
                     dealloc(addrlen as *mut u8, Layout::new::<libc::socklen_t>());
                 }
-                Cancellation::new(self.addr as *mut (), self.len as usize, callback)
+                unsafe {
+                    Cancellation::new(self.addr as *mut (), self.len as usize, callback)
+                }
             }
             Op::Close   => Cancellation::null(),
             Op::Nothing => return,
@@ -146,7 +148,7 @@ impl<D: Drive + Clone> TcpListener<D> {
         let fd = self.fd;
         let flags = 0;
         let (addr, addrlen) = self.as_mut().addr();
-        let fd = ready!(self.as_mut().ring().poll(ctx, |sqe| unsafe {
+        let fd = ready!(self.as_mut().ring().poll(ctx, true, |sqe| unsafe {
             uring_sys::io_uring_prep_accept(sqe.raw_mut(), fd, addr, addrlen, flags);
         }))? as RawFd;
         let addr = unsafe {
@@ -213,7 +215,7 @@ impl<'a, D: Drive> Future for Close<'a, D> {
     fn poll(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<io::Result<()>> {
         self.socket.as_mut().guard_op(Op::Close);
         let fd = self.socket.fd;
-        ready!(self.socket.as_mut().ring().poll(ctx, |sqe| unsafe {
+        ready!(self.socket.as_mut().ring().poll(ctx, true, |sqe| unsafe {
             uring_sys::io_uring_prep_close(sqe.raw_mut(), fd);
         }))?;
         Poll::Ready(Ok(()))

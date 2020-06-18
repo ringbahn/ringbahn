@@ -4,10 +4,12 @@ pub mod event;
 pub mod net;
 
 mod buf;
+mod cancellation;
 mod completion;
 mod ring;
 mod submission;
 
+pub use cancellation::Cancellation;
 pub use ring::Ring;
 pub use submission::Submission;
 

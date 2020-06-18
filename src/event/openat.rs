@@ -26,13 +26,11 @@ impl Event for OpenAt {
         uring_sys::io_uring_prep_openat(sqe.raw_mut(), self.dfd, path, self.flags, self.mode);
     }
 
-    fn cancellation(this: &mut ManuallyDrop<Self>) -> Cancellation {
-        unsafe {
-            let path = ManuallyDrop::take(this).path;
-            let mut bytes = ManuallyDrop::new(path.into_bytes_with_nul());
-            let ptr = bytes.as_mut_ptr();
-            let cap = bytes.capacity();
-            Cancellation::buffer(ptr, cap)
-        }
+    unsafe fn cancel(this: &mut ManuallyDrop<Self>) -> Cancellation {
+        let path = ManuallyDrop::take(this).path;
+        let mut bytes = ManuallyDrop::new(path.into_bytes_with_nul());
+        let ptr = bytes.as_mut_ptr();
+        let cap = bytes.capacity();
+        Cancellation::buffer(ptr, cap)
     }
 }
