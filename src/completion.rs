@@ -55,6 +55,7 @@ impl Completion {
             Submitted(old_waker)    => {
                 let waker = if old_waker.will_wake(waker) { old_waker } else { waker.clone() };
                 *state = Submitted(waker);
+                drop(state);
                 Err(self)
             }
             Completed(result)       => {

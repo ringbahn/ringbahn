@@ -131,7 +131,7 @@ impl<D: Drive> AsyncBufRead for TcpStream<D> {
         let fd = self.fd;
         let (ring, buf) = self.split();
         buf.fill_buf(|buf| {
-            let n = ready!(ring.poll(ctx, |sqe| unsafe { sqe.prep_read(fd, buf, 0) }))?;
+            let n = ready!(ring.poll(ctx, true, |sqe| unsafe { sqe.prep_read(fd, buf, 0) }))?;
             Poll::Ready(Ok(n as u32))
         })
     }
@@ -149,7 +149,7 @@ impl<D: Drive> AsyncWrite for TcpStream<D> {
         let data = ready!(buf.fill_buf(|mut buf| {
             Poll::Ready(Ok(io::Write::write(&mut buf, slice)? as u32))
         }))?;
-        let n = ready!(ring.poll(ctx, |sqe| unsafe { sqe.prep_write(fd, data, 0) }))?;
+        let n = ready!(ring.poll(ctx, true, |sqe| unsafe { sqe.prep_write(fd, data, 0) }))?;
         buf.clear();
         Poll::Ready(Ok(n))
     }
@@ -162,7 +162,7 @@ impl<D: Drive> AsyncWrite for TcpStream<D> {
     fn poll_close(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<io::Result<()>> {
         self.as_mut().guard_op(Op::Close);
         let fd = self.fd;
-        ready!(self.ring().poll(ctx, |sqe| unsafe {
+        ready!(self.ring().poll(ctx, true, |sqe| unsafe {
             uring_sys::io_uring_prep_close(sqe.raw_mut(), fd)
         }))?;
         Poll::Ready(Ok(()))

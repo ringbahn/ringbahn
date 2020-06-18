@@ -1,4 +1,5 @@
 use std::io;
+use std::mem;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
@@ -61,6 +62,10 @@ impl<D: Drive> Ring<D> {
         }
     }
 
+    pub fn driver(&self) -> &D {
+        &self.driver
+    }
+
     /// Poll the ring state machine.
     ///
     /// This accepts a callback, `prepare`, which prepares an event to be submitted to io-uring.
@@ -71,67 +76,80 @@ impl<D: Drive> Ring<D> {
     pub fn poll(
         mut self: Pin<&mut Self>,
         ctx: &mut Context<'_>,
+        is_eager: bool,
         prepare: impl FnOnce(&mut iou::SubmissionQueueEvent<'_>),
     ) -> Poll<io::Result<usize>> {
-        unsafe {
-            match self.state {
-                Inert       => {
-                    ready!(self.as_mut().try_prepare(ctx, prepare));
-                    ready!(self.as_mut().try_submit(ctx));
-                    Poll::Pending
-                }
-                Prepared    => {
-                    match self.as_mut().try_complete(ctx) {
-                        ready @ Poll::Ready(..) => ready,
-                        Poll::Pending           => {
-                            ready!(self.as_mut().try_submit(ctx));
-                            Poll::Pending
-                        }
+        match self.state {
+            Inert       => {
+                ready!(self.as_mut().poll_prepare(ctx, prepare));
+                ready!(self.as_mut().poll_submit(ctx, is_eager));
+                Poll::Pending
+            }
+            Prepared    => {
+                match self.as_mut().poll_complete(ctx) {
+                    ready @ Poll::Ready(..) => ready,
+                    Poll::Pending           => {
+                        ready!(self.poll_submit(ctx, is_eager));
+                        Poll::Pending
                     }
                 }
-                Submitted   => self.try_complete(ctx),
-                Lost        => panic!("engine in a bad state; driver is faulty"),
             }
+            Submitted   => self.poll_complete(ctx),
+            Lost        => panic!("Ring in a bad state; driver is faulty"),
         }
     }
 
     #[inline(always)]
-    unsafe fn try_prepare(
-        mut self: Pin<&mut Self>,
+    fn poll_prepare(
+        self: Pin<&mut Self>,
         ctx: &mut Context<'_>,
         prepare: impl FnOnce(&mut iou::SubmissionQueueEvent<'_>),
     ) -> Poll<()> {
-        let (driver, mut state) = self.as_mut().driver_and_state();
-        let completion = ready!(driver.poll_prepare(ctx, |mut sqe, ctx| {
+        let (driver, state, completion_slot) = self.split();
+        let completion = ready!(driver.poll_prepare(ctx, |sqe, ctx| {
+            struct SubmissionCleaner<'a>(iou::SubmissionQueueEvent<'a>);
+
+            impl Drop for SubmissionCleaner<'_> {
+                fn drop(&mut self) {
+                    unsafe {
+                        self.0.prep_nop();
+                        self.0.set_user_data(0);
+                    }
+                }
+            }
+
+            let mut sqe = SubmissionCleaner(sqe);
             *state = Lost;
-            prepare(&mut sqe);
+            prepare(&mut sqe.0);
             let completion = Completion::new(ctx.waker().clone());
-            sqe.set_user_data(completion.addr());
+            sqe.0.set_user_data(completion.addr());
+            mem::forget(sqe);
             ExternalCompletion::new(completion, ctx)
         }));
         *state = Prepared;
-        *self.completion() = Some(completion.real);
+        *completion_slot = Some(completion.real);
         Poll::Ready(())
     }
 
     #[inline(always)]
-    unsafe fn try_submit(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<()> {
-        let (driver, mut state) = self.driver_and_state();
+    fn poll_submit(self: Pin<&mut Self>, ctx: &mut Context<'_>, is_eager: bool) -> Poll<()> {
+        let (driver, state, _) = self.split();
         // TODO figure out how to handle this result
-        let _ = ready!(driver.poll_submit(ctx, true));
+        let _ = ready!(driver.poll_submit(ctx, is_eager));
         *state = Submitted;
         Poll::Ready(())
     }
 
     #[inline(always)]
-    unsafe fn try_complete(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<io::Result<usize>> {
-        match self.as_mut().completion().take().unwrap().check(ctx.waker()) {
+    fn poll_complete(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<io::Result<usize>> {
+        let (_, state, completion_slot) = self.split();
+        match completion_slot.take().unwrap().check(ctx.waker()) {
             Ok(result)      => {
-                *self.state() = Inert;
+                *state = Inert;
                 Poll::Ready(result)
             }
             Err(completion) => {
-                *self.completion() = Some(completion);
+                *completion_slot = Some(completion);
                 Poll::Pending
             }
         }
@@ -155,21 +173,10 @@ impl<D: Drive> Ring<D> {
         unsafe { Pin::get_unchecked_mut(self).cancel(cancellation) }
     }
 
-    #[inline(always)]
-    fn driver_and_state(self: Pin<&mut Self>) -> (Pin<&mut D>, Pin<&mut State>) {
+    fn split(self: Pin<&mut Self>) -> (Pin<&mut D>, &mut State, &mut Option<Completion>) {
         unsafe {
             let this = Pin::get_unchecked_mut(self);
-            (Pin::new_unchecked(&mut this.driver), Pin::new_unchecked(&mut this.state))
+            (Pin::new_unchecked(&mut this.driver), &mut this.state, &mut this.completion)
         }
-    }
-
-    #[inline(always)]
-    fn state(self: Pin<&mut Self>) -> Pin<&mut State> {
-        unsafe { Pin::map_unchecked_mut(self, |this| &mut this.state) }
-    }
-
-    #[inline(always)]
-    fn completion(self: Pin<&mut Self>) -> Pin<&mut Option<Completion>> {
-        unsafe { Pin::map_unchecked_mut(self, |this| &mut this.completion) }
     }
 }
