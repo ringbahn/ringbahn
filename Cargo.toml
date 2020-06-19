@@ -1,6 +1,6 @@
 [package]
 name = "ringbahn"
-version = "0.0.0-experimental.2"
+version = "0.0.0-experimental.3"
 authors = ["Without Boats <woboats@gmail.com>"]
 description = "an experimental safe API for io-uring"
 repository = "https://github.com/withoutboats/ringbahn"
