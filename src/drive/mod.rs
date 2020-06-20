@@ -11,7 +11,7 @@ use std::task::{Context, Poll};
 use crate::completion;
 
 pub use crate::completion::complete;
-pub use buf::{ProvideBuffer, HeapBuffer};
+pub use buf::*;
 
 /// A ccompletion which will be used to wake the task waiting on this event.
 ///

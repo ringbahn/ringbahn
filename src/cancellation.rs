@@ -1,3 +1,4 @@
+use std::mem::ManuallyDrop;
 use std::ptr;
 
 /// A cancellation callback to clean up resources when IO gets cancelled.
@@ -9,7 +10,7 @@ use std::ptr;
 pub struct Cancellation {
     data: *mut (),
     metadata: usize,
-    drop: unsafe fn(*mut (), usize),
+    drop: unsafe fn(*mut (), usize, u32),
 }
 
 impl Cancellation {
@@ -25,7 +26,7 @@ impl Cancellation {
     /// as well.
     ///
     /// It must be safe to send the Cancellation type and references to it between threads.
-    pub unsafe fn new(data: *mut (), metadata: usize, drop: unsafe fn(*mut (), usize))
+    pub unsafe fn new(data: *mut (), metadata: usize, drop: unsafe fn(*mut (), usize, u32))
         -> Cancellation
     {
         Cancellation { data, metadata, drop }
@@ -33,13 +34,18 @@ impl Cancellation {
 
     /// Construct a null cancellation, which does nothing when it is dropped.
     pub fn null() -> Cancellation {
-        unsafe fn drop(_: *mut (), _: usize) { }
+        unsafe fn drop(_: *mut (), _: usize, _: u32) { }
         Cancellation { data: ptr::null_mut(), metadata: 0, drop }
+    }
+
+    pub fn cancel(self, cqe_flags: u32) {
+        let this = ManuallyDrop::new(self);
+        unsafe { (this.drop)(this.data, this.metadata, cqe_flags) }
     }
 
 
     pub(crate) unsafe fn buffer(data: *mut u8, len: usize) -> Cancellation {
-        unsafe fn drop(data: *mut (), len: usize) {
+        unsafe fn drop(data: *mut (), len: usize, _: u32) {
             std::mem::drop(Vec::from_raw_parts(data as *mut u8, len, len))
         }
 
@@ -53,7 +59,7 @@ unsafe impl Sync for Cancellation { }
 impl Drop for Cancellation {
     fn drop(&mut self) {
         unsafe {
-            (self.drop)(self.data, self.metadata)
+            (self.drop)(self.data, self.metadata, 0)
         }
     }
 }

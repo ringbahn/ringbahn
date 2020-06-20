@@ -26,7 +26,7 @@ pub struct Completion {
 
 enum State {
     Submitted(Waker),
-    Completed(io::Result<usize>),
+    Completed(io::Result<usize>, u32),
     Cancelled(Cancellation),
     Empty,
 }
@@ -49,21 +49,21 @@ impl Completion {
     /// Check if the completion has completed. If it has, the result of the completion will be
     /// returned and the completion will be deallocated. If it has not been completed, the waker
     /// field will be updated to the new waker if the old waker would not wake the same task.
-    pub fn check(self, waker: &Waker) -> Result<io::Result<usize>, Completion> {
+    pub fn check(self, waker: &Waker) -> Result<(io::Result<usize>, u32), Completion> {
         let mut state = self.state.lock();
         match mem::replace(&mut *state, State::Empty) {
-            Submitted(old_waker)    => {
+            Submitted(old_waker)        => {
                 let waker = if old_waker.will_wake(waker) { old_waker } else { waker.clone() };
                 *state = Submitted(waker);
                 drop(state);
                 Err(self)
             }
-            Completed(result)       => {
+            Completed(result, flags)    => {
                 drop(state);
                 drop(ManuallyDrop::into_inner(self.state));
-                Ok(result)
+                Ok((result, flags))
             }
-            _                       => unreachable!()
+            _                           => unreachable!()
         }
     }
 
@@ -72,15 +72,15 @@ impl Completion {
     pub fn cancel(self, callback: Cancellation) {
         let mut state = self.state.lock();
         match &*state {
-            Submitted(_)    => {
+            Submitted(_)        => {
                 *state = Cancelled(callback);
             }
-            Completed(_)    => {
-                drop(callback);
+            Completed(_, flags) => {
+                callback.cancel(*flags);
                 drop(state);
                 drop(ManuallyDrop::into_inner(self.state));
             }
-            _               => unreachable!()
+            _                   => unreachable!()
         }
     }
 }
@@ -100,6 +100,7 @@ pub unsafe fn complete(cqe: iou::CompletionQueueEvent) {
     if cqe.is_timeout() { return; }
 
     let result = cqe.result();
+    let flags = cqe.raw_flags();
     let completion = cqe.user_data() as *mut Mutex<State>;
 
     if completion != ptr::null_mut() {
@@ -107,11 +108,11 @@ pub unsafe fn complete(cqe: iou::CompletionQueueEvent) {
         let mut state = state.lock();
         match mem::replace(&mut *state, State::Empty) {
             Submitted(waker)    => {
-                *state = Completed(result);
+                *state = Completed(result, flags);
                 waker.wake();
             }
             Cancelled(callback) => {
-                drop(callback);
+                callback.cancel(flags);
                 drop(state);
                 drop(Box::from_raw(completion));
             }

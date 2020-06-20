@@ -82,7 +82,7 @@ impl<D: Drive> Ring<D> {
         ctx: &mut Context<'_>,
         is_eager: bool,
         prepare: impl FnOnce(&mut iou::SubmissionQueueEvent<'_>),
-    ) -> Poll<io::Result<usize>> {
+    ) -> Poll<(io::Result<usize>, u32)> {
         match self.state {
             Inert       => {
                 ready!(self.as_mut().poll_prepare(ctx, prepare));
@@ -145,7 +145,7 @@ impl<D: Drive> Ring<D> {
     }
 
     #[inline(always)]
-    fn poll_complete(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<io::Result<usize>> {
+    fn poll_complete(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<(io::Result<usize>, u32)> {
         let (_, state, completion_slot) = self.split();
         match completion_slot.take().unwrap().check(ctx.waker()) {
             Ok(result)      => {

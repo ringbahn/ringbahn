@@ -40,18 +40,18 @@ impl<E, D> Future for Submission<E, D> where
     E: Event,
     D: Drive,
 {
-    type Output = (E, io::Result<usize>);
+    type Output = (E, io::Result<usize>, u32);
 
     fn poll(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<Self::Output> {
         let (ring, event) = self.split();
 
-        let result = if let Some(event) = event {
+        let (result, flags) = if let Some(event) = event {
             ready!(ring.poll(ctx, event.is_eager(), |sqe| unsafe { event.prepare(sqe) }))
         } else {
             panic!("polled Submission after completion")
         };
 
-        Poll::Ready((ManuallyDrop::into_inner(event.take().unwrap()), result))
+        Poll::Ready((ManuallyDrop::into_inner(event.take().unwrap()), result, flags))
     }
 }
 

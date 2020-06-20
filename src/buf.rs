@@ -1,8 +1,9 @@
 use std::alloc::{alloc, dealloc, handle_alloc_error, Layout};
 use std::io;
 use std::cmp;
-use std::pin::Pin;
+use std::marker::Unpin;
 use std::mem::{MaybeUninit, ManuallyDrop};
+use std::pin::Pin;
 use std::task::{Poll, Context};
 use std::slice;
 
@@ -45,13 +46,13 @@ impl<D: Drive> Buffer<D> {
         }
     }
 
-    // invariant: if fill returns N, it must actually ahve filled read buf up to n bytes
+    // invariant: if fill returns N, it must actually have filled read buf up to n bytes
     #[inline]
     pub unsafe fn fill_read_buf(
         &mut self,
         ctx: &mut Context<'_>,
         mut ring: Pin<&mut Ring<D>>,
-        fill: impl FnOnce(Pin<&mut Ring<D>>, &mut Context<'_>, &mut D::ReadBuf) -> Poll<io::Result<u32>>
+        fill: impl FnOnce(Pin<&mut Ring<D>>, &mut Context<'_>, &mut D::ReadBuf) -> Poll<(io::Result<usize>, u32)>,
     ) -> Poll<io::Result<&[u8]>> {
         if matches!(self.storage, Storage::Empty) {
             ready!(self.alloc_read_buf(ctx, ring.as_mut()))?;
@@ -59,8 +60,16 @@ impl<D: Drive> Buffer<D> {
         match &mut self.storage {
             Storage::Read(buf)  => {
                 if self.pos >= self.cap {
-                    self.cap = ready!(fill(ring, ctx, &mut *buf))?;
+                    buf.return_to_group(ring.as_mut().driver_pinned());
+
+                    let (result, flags) = ready!(fill(ring.as_mut(), ctx, &mut *buf));
+
+                    self.cap = result? as u32;
                     self.pos = 0;
+
+                    if flags & 1 == 1 {
+                        buf.access_from_group(ring.driver_pinned(), (flags >> 16) as u16);
+                    }
                 }
                 Poll::Ready(Ok(self.buffered_from_read()))
             }
@@ -102,16 +111,16 @@ impl<D: Drive> Buffer<D> {
         self.cap = 0;
     }
 
-    pub fn cancellation(&mut self) -> Cancellation {
+    pub fn cancellation(&mut self, driver: Pin<&mut D>) -> Cancellation {
         let cancellation = match &mut self.storage {
             Storage::Read(buf)      => unsafe {
-                ProvideBuffer::cleanup(ManuallyDrop::new(ManuallyDrop::take(buf)))
+                ProvideBuffer::cleanup(ManuallyDrop::new(ManuallyDrop::take(buf)), driver)
             }
             Storage::Write(buf)     => unsafe {
-                ProvideBuffer::cleanup(ManuallyDrop::new(ManuallyDrop::take(buf)))
+                ProvideBuffer::cleanup(ManuallyDrop::new(ManuallyDrop::take(buf)), driver)
             }
             Storage::Statx(statx)   => {
-                unsafe fn callback(statx: *mut (), _: usize) {
+                unsafe fn callback(statx: *mut (), _: usize, _: u32) {
                     dealloc(statx as *mut u8, Layout::new::<libc::statx>())
                 }
 
@@ -182,3 +191,5 @@ impl<D: Drive> Drop for Buffer<D> {
         }
     }
 }
+
+impl<D: Drive> Unpin for Buffer<D> { }

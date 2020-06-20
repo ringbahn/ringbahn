@@ -25,7 +25,7 @@ impl Event for Connect {
     }
 
     unsafe fn cancel(this: &mut ManuallyDrop<Self>) -> Cancellation {
-        unsafe fn callback(addr: *mut (), _: usize) {
+        unsafe fn callback(addr: *mut (), _: usize, _: u32) {
             dealloc(addr as *mut u8, Layout::new::<libc::sockaddr_storage>());
         }
         Cancellation::new(&mut *this.addr as *mut libc::sockaddr_storage as *mut (), 0, callback)

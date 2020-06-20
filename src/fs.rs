@@ -3,6 +3,7 @@
 use std::fs;
 use std::future::Future;
 use std::io;
+use std::marker::Unpin;
 use std::mem::ManuallyDrop;
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 use std::path::Path;
@@ -93,17 +94,18 @@ impl<D: Drive> File<D> {
         } else { &[] }
     }
 
-    fn guard_op(self: Pin<&mut Self>, op: Op) {
-        let this = unsafe { Pin::get_unchecked_mut(self) };
-        if this.active != Op::Nothing && this.active != op {
-            this.cancel();
+    fn guard_op(mut self: Pin<&mut Self>, op: Op) {
+        if self.active != Op::Nothing && self.active != op {
+            self.as_mut().cancel();
         }
-        this.active = op;
+        *self.active() = op;
     }
 
-    fn cancel(&mut self) {
-        self.active = Op::Nothing;
-        self.ring.cancel(self.buf.cancellation());
+    fn cancel(mut self: Pin<&mut Self>) {
+        *self.as_mut().active() = Op::Nothing;
+        let (mut ring, buf, _) = self.split();
+        let cancellation = buf.cancellation(ring.as_mut().driver_pinned());
+        ring.cancel_pinned(cancellation);
     }
 
     fn poll_file_size(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<io::Result<usize>> {
@@ -116,9 +118,10 @@ impl<D: Drive> File<D> {
         let flags = libc::AT_EMPTY_PATH;
         let mask = libc::STATX_SIZE;
         unsafe {
-            ready!(ring.poll(ctx, true, |sqe| {
+            let (result, _) = ready!(ring.poll(ctx, true, |sqe| {
                 uring_sys::io_uring_prep_statx(sqe.raw_mut(), fd, &EMPTY, flags, mask, statx);
-            }))?;
+            }));
+            result?;
 
             Poll::Ready(Ok((*statx).stx_size as usize))
         }
@@ -146,6 +149,11 @@ impl<D: Drive> File<D> {
     fn pos(self: Pin<&mut Self>) -> Pin<&mut usize> {
         unsafe { Pin::map_unchecked_mut(self, |this| &mut this.pos) }
     }
+
+    #[inline(always)]
+    fn active(self: Pin<&mut Self>) -> Pin<&mut Op> {
+        unsafe { Pin::map_unchecked_mut(self, |this| &mut this.active) }
+    }
 }
 
 impl<D: Drive> AsyncRead for File<D> {
@@ -166,13 +174,15 @@ impl<D: Drive> AsyncBufRead for File<D> {
         let (ring, buf, pos) = self.split();
         unsafe {
             buf.fill_read_buf(ctx, ring, |ring, ctx, buf| {
-                let n = ready!(ring.poll(ctx, true, |sqe| {
+                let (result, flags) = ready!(ring.poll(ctx, true, |sqe| {
                     buf.prepare_read(sqe);
                     sqe.raw_mut().fd = fd;
                     sqe.raw_mut().off_addr2.off = *pos as u64;
-                }))?;
-                *pos += n;
-                Poll::Ready(Ok(n as u32))
+                }));
+                if let Ok(n) = &result {
+                    *pos += n;
+                }
+                Poll::Ready((result, flags))
             })
         }
     }
@@ -188,13 +198,14 @@ impl<D: Drive> AsyncWrite for File<D> {
         let fd = self.fd;
         let (mut ring, buf, pos) = self.split();
         let data = ready!(buf.fill_write_buf(ctx, ring.as_mut(), slice))?;
-        let n = ready!(ring.poll(ctx, true, |sqe| unsafe {
+        let (result, _) = ready!(ring.poll(ctx, true, |sqe| unsafe {
             data.prepare_write(sqe);
             sqe.raw_mut().fd = fd;
             sqe.raw_mut().off_addr2.off = *pos as u64;
-        }))?;
-        *pos += n;
+        }));
         buf.clear();
+        let n = result?;
+        *pos += n;
         Poll::Ready(Ok(n))
     }
 
@@ -206,9 +217,10 @@ impl<D: Drive> AsyncWrite for File<D> {
     fn poll_close(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<io::Result<()>> {
         self.as_mut().guard_op(Op::Close);
         let fd = self.fd;
-        ready!(self.ring().poll(ctx, true, |sqe| unsafe {
+        let (result, _) = ready!(self.ring().poll(ctx, true, |sqe| unsafe {
             uring_sys::io_uring_prep_close(sqe.raw_mut(), fd)
-        }))?;
+        }));
+        result?;
         Poll::Ready(Ok(()))
     }
 }
@@ -237,10 +249,10 @@ impl From<fs::File> for File {
     }
 }
 
-impl<D: Drive> From<File<D>> for fs::File {
+impl<D: Drive + Unpin> From<File<D>> for fs::File {
     fn from(mut file: File<D>) -> fs::File {
         unsafe {
-            file.cancel();
+            Pin::new(&mut file).cancel();
             let file = ManuallyDrop::new(file);
             fs::File::from_raw_fd(file.fd)
         }
@@ -249,9 +261,11 @@ impl<D: Drive> From<File<D>> for fs::File {
 
 impl<D: Drive> Drop for File<D> {
     fn drop(&mut self) {
-        match self.active {
-            Op::Nothing => unsafe { libc::close(self.fd); },
-            _           => self.cancel(),
+        unsafe {
+            match self.active {
+                Op::Nothing => { libc::close(self.fd); }
+                _           => Pin::new_unchecked(self).cancel(),
+            }
         }
     }
 }
@@ -270,7 +284,7 @@ impl<D: Drive + Clone> Future for Open<D> {
 
     fn poll(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<io::Result<File<D>>> {
         let mut inner = self.inner();
-        let (_, result) = ready!(inner.as_mut().poll(ctx));
+        let (_, result, _) = ready!(inner.as_mut().poll(ctx));
         let fd = result? as i32;
         let driver = inner.driver().clone();
         Poll::Ready(Ok(File::from_fd(fd, driver)))
@@ -291,7 +305,7 @@ impl<D: Drive + Clone> Future for Create<D> {
 
     fn poll(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<io::Result<File<D>>> {
         let mut inner = self.inner();
-        let (_, result) = ready!(inner.as_mut().poll(ctx));
+        let (_, result, _) = ready!(inner.as_mut().poll(ctx));
         let fd = result? as i32;
         let driver = inner.driver().clone();
         Poll::Ready(Ok(File::from_fd(fd, driver)))

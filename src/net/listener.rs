@@ -85,7 +85,7 @@ impl<D: Drive> TcpListener<D> {
     fn cancel(&mut self) {
         let cancellation = match self.active {
             Op::Accept  => {
-                unsafe fn callback(addr: *mut (), addrlen: usize) {
+                unsafe fn callback(addr: *mut (), addrlen: usize, _: u32) {
                     dealloc(addr as *mut u8, Layout::new::<libc::sockaddr_storage>());
                     dealloc(addrlen as *mut u8, Layout::new::<libc::socklen_t>());
                 }
@@ -148,9 +148,10 @@ impl<D: Drive + Clone> TcpListener<D> {
         let fd = self.fd;
         let flags = 0;
         let (addr, addrlen) = self.as_mut().addr();
-        let fd = ready!(self.as_mut().ring().poll(ctx, true, |sqe| unsafe {
+        let (result, _) = ready!(self.as_mut().ring().poll(ctx, true, |sqe| unsafe {
             uring_sys::io_uring_prep_accept(sqe.raw_mut(), fd, addr, addrlen, flags);
-        }))? as RawFd;
+        }));
+        let fd = result? as RawFd;
         let addr = unsafe {
             let result = addr_from_c(&*addr, *addrlen as usize);
             self.as_mut().drop_addr();
@@ -215,9 +216,10 @@ impl<'a, D: Drive> Future for Close<'a, D> {
     fn poll(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<io::Result<()>> {
         self.socket.as_mut().guard_op(Op::Close);
         let fd = self.socket.fd;
-        ready!(self.socket.as_mut().ring().poll(ctx, true, |sqe| unsafe {
+        let (result, _) = ready!(self.socket.as_mut().ring().poll(ctx, true, |sqe| unsafe {
             uring_sys::io_uring_prep_close(sqe.raw_mut(), fd);
-        }))?;
+        }));
+        result?;
         Poll::Ready(Ok(()))
     }
 }

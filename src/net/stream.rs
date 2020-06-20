@@ -56,17 +56,18 @@ impl<D: Drive> TcpStream<D> {
         }
     }
 
-    fn guard_op(self: Pin<&mut Self>, op: Op) {
-        let this = unsafe { Pin::get_unchecked_mut(self) };
-        if this.active != Op::Nothing && this.active != op {
-            this.cancel();
+    fn guard_op(mut self: Pin<&mut Self>, op: Op) {
+        if self.active != Op::Nothing && self.active != op {
+            self.as_mut().cancel();
         }
-        this.active = op;
+        *self.active() = op;
     }
 
-    fn cancel(&mut self) {
-        self.active = Op::Nothing;
-        self.ring.cancel(self.buf.cancellation());
+    fn cancel(mut self: Pin<&mut Self>) {
+        *self.as_mut().active() = Op::Nothing;
+        let (mut ring, buf) = self.split();
+        let cancellation = buf.cancellation(ring.as_mut().driver_pinned());
+        ring.cancel_pinned(cancellation);
     }
 
     #[inline(always)]
@@ -77,6 +78,11 @@ impl<D: Drive> TcpStream<D> {
     #[inline(always)]
     fn buf(self: Pin<&mut Self>) -> Pin<&mut Buffer<D>> {
         unsafe { Pin::map_unchecked_mut(self, |this| &mut this.buf) }
+    }
+
+    #[inline(always)]
+    fn active(self: Pin<&mut Self>) -> Pin<&mut Op> {
+        unsafe { Pin::map_unchecked_mut(self, |this| &mut this.active) }
     }
 
     #[inline(always)]
@@ -100,7 +106,7 @@ impl<D: Drive + Clone> Future for Connect<D> {
             match &mut Pin::get_unchecked_mut(self).0 {
                 Ok(submission)  => {
                     let mut submission = Pin::new_unchecked(submission);
-                    let (connect, result) = ready!(submission.as_mut().poll(ctx));
+                    let (connect, result, _) = ready!(submission.as_mut().poll(ctx));
                     result?;
                     let driver = submission.driver().clone();
                     Poll::Ready(Ok(TcpStream::from_fd(connect.fd, Ring::new(driver))))
@@ -132,12 +138,11 @@ impl<D: Drive> AsyncBufRead for TcpStream<D> {
         let (ring, buf) = self.split();
         unsafe {
             buf.fill_read_buf(ctx, ring, |ring, ctx, buf| {
-                let n = ready!(ring.poll(ctx, true, |sqe| {
+                ring.poll(ctx, true, |sqe| {
                     buf.prepare_read(sqe);
                     sqe.raw_mut().fd = fd;
                     sqe.raw_mut().off_addr2.off = 0;
-                }))?;
-                Poll::Ready(Ok(n as u32))
+                })
             })
         }
     }
@@ -153,13 +158,13 @@ impl<D: Drive> AsyncWrite for TcpStream<D> {
         let fd = self.fd;
         let (mut ring, buf) = self.split();
         let data = ready!(buf.fill_write_buf(ctx, ring.as_mut(), slice))?;
-        let n = ready!(ring.poll(ctx, true, |sqe| unsafe {
+        let (result, _) = ready!(ring.poll(ctx, true, |sqe| unsafe {
             data.prepare_write(sqe);
             sqe.raw_mut().fd = fd;
             sqe.raw_mut().off_addr2.off = 0;
-        }))?;
+        }));
         buf.clear();
-        Poll::Ready(Ok(n))
+        Poll::Ready(result)
     }
 
     fn poll_flush(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<io::Result<()>> {
@@ -170,9 +175,22 @@ impl<D: Drive> AsyncWrite for TcpStream<D> {
     fn poll_close(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<io::Result<()>> {
         self.as_mut().guard_op(Op::Close);
         let fd = self.fd;
-        ready!(self.ring().poll(ctx, true, |sqe| unsafe {
+        let (result, _) = ready!(self.ring().poll(ctx, true, |sqe| unsafe {
             uring_sys::io_uring_prep_close(sqe.raw_mut(), fd)
-        }))?;
+        }));
+        result?;
         Poll::Ready(Ok(()))
     }
 }
+
+impl<D: Drive> Drop for TcpStream<D> {
+    fn drop(&mut self) {
+        unsafe {
+            match self.active {
+                Op::Nothing => { libc::close(self.fd); }
+                _           => Pin::new_unchecked(self).cancel(),
+            }
+        }
+    }
+}
+

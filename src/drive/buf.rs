@@ -60,14 +60,26 @@ pub trait ProvideBuffer<D: Drive + ?Sized> {
     /// until after this SQE has been completed.
     unsafe fn prepare_write(&mut self, sqe: &mut iou::SubmissionQueueEvent<'_>);
 
+    unsafe fn access_from_group(&mut self, driver: Pin<&mut D>, idx: u16);
+    unsafe fn return_to_group(&mut self, driver: Pin<&mut D>);
+
     /// Construct a cancellation to clean up this buffer.
-    fn cleanup(this: ManuallyDrop<Self>) -> Cancellation;
+    fn cleanup(this: ManuallyDrop<Self>, driver: Pin<&mut D>) -> Cancellation;
 }
 
 pub struct HeapBuffer {
     data: NonNull<MaybeUninit<u8>>,
     filled: u32,
     capacity: u32,
+}
+
+impl HeapBuffer {
+    pub unsafe fn new(data: NonNull<MaybeUninit<u8>>, capacity: u32) -> HeapBuffer {
+        HeapBuffer {
+            data, capacity,
+            filled: 0,
+        }
+    }
 }
 
 impl<D: Drive + ?Sized> ProvideBuffer<D> for HeapBuffer {
@@ -81,11 +93,7 @@ impl<D: Drive + ?Sized> ProvideBuffer<D> for HeapBuffer {
             if ptr.is_null() {
                 handle_alloc_error(layout);
             }
-            Poll::Ready(Ok(HeapBuffer {
-                data: NonNull::new_unchecked(ptr).cast(),
-                capacity: capacity as u32,
-                filled: 0,
-            }))
+            Poll::Ready(Ok(HeapBuffer::new(NonNull::new_unchecked(ptr).cast(), capacity as u32)))
         }
     }
 
@@ -116,7 +124,10 @@ impl<D: Drive + ?Sized> ProvideBuffer<D> for HeapBuffer {
         sqe.cmd_flags.rw_flags = 0;
     }
 
-    fn cleanup(this: ManuallyDrop<Self>) -> Cancellation {
+    unsafe fn access_from_group(&mut self, _: Pin<&mut D>, _: u16) { }
+    unsafe fn return_to_group(&mut self, _: Pin<&mut D>) { }
+
+    fn cleanup(this: ManuallyDrop<Self>, _: Pin<&mut D>) -> Cancellation {
         unsafe { Cancellation::buffer(this.data.cast().as_ptr(), this.capacity as usize) }
     }
 }
@@ -131,4 +142,131 @@ impl Drop for HeapBuffer {
             dealloc(self.data.cast().as_ptr(), layout);
         }
     }
+}
+
+use futures_core::ready;
+
+pub struct RegisteredBuffer {
+    buf: HeapBuffer,
+    idx: BufferId,
+}
+
+impl<D: RegisterBuffer + ?Sized> ProvideBuffer<D> for RegisteredBuffer {
+    fn poll_provide(driver: Pin<&mut D>, ctx: &mut Context<'_>, capacity: usize)
+        -> Poll<io::Result<Self>>
+    {
+        let (buf, idx) = ready!(driver.poll_provide_registered(ctx, capacity))?;
+        Poll::Ready(Ok(RegisteredBuffer { buf, idx }))
+    }
+
+    unsafe fn fill(&mut self, data: &[u8]) {
+        <HeapBuffer as ProvideBuffer<D>>::fill(&mut self.buf, data)
+    }
+
+    unsafe fn as_slice(&self) -> &[MaybeUninit<u8>] {
+        <HeapBuffer as ProvideBuffer<D>>::as_slice(&self.buf)
+    }
+
+    unsafe fn prepare_read(&mut self, sqe: &mut iou::SubmissionQueueEvent<'_>) {
+        <HeapBuffer as ProvideBuffer<D>>::prepare_read(&mut self.buf, sqe);
+        sqe.raw_mut().opcode = uring_sys::IoRingOp::IORING_OP_READ_FIXED as _;
+        sqe.raw_mut().buf_index.buf_index.index_or_group = self.idx.upper_idx as _;
+    }
+
+    unsafe fn prepare_write(&mut self, sqe: &mut iou::SubmissionQueueEvent<'_>) {
+        <HeapBuffer as ProvideBuffer<D>>::prepare_write(&mut self.buf, sqe);
+        sqe.raw_mut().opcode = uring_sys::IoRingOp::IORING_OP_WRITE_FIXED as _;
+        sqe.raw_mut().buf_index.buf_index.index_or_group = self.idx.upper_idx as _;
+    }
+
+    unsafe fn access_from_group(&mut self, _: Pin<&mut D>, _: u16) { }
+    unsafe fn return_to_group(&mut self, _: Pin<&mut D>) { }
+
+    fn cleanup(this: ManuallyDrop<Self>, driver: Pin<&mut D>) -> Cancellation {
+        let RegisteredBuffer { buf, idx } = ManuallyDrop::into_inner(this);
+        let buf = ManuallyDrop::new(buf);
+        driver.cleanup_registered(buf, idx)
+    }
+}
+
+pub trait RegisterBuffer: Drive {
+    fn poll_provide_registered(self: Pin<&mut Self>, ctx: &mut Context<'_>, capacity: usize)
+        -> Poll<io::Result<(HeapBuffer, BufferId)>>;
+    fn cleanup_registered(self: Pin<&mut Self>, buf: ManuallyDrop<HeapBuffer>, idx: BufferId) -> Cancellation;
+}
+
+#[derive(Eq, PartialEq, Clone, Copy, Ord, PartialOrd, Hash)]
+pub struct BufferId {
+    pub upper_idx: u16,
+    pub lower_idx: u16,
+}
+
+pub struct GroupRegisteredBuffer {
+    group: u16,
+    idx: u16,
+    buf: Option<HeapBuffer>,
+}
+
+impl<D: RegisterBufferGroup + ?Sized> ProvideBuffer<D> for GroupRegisteredBuffer {
+    fn poll_provide(driver: Pin<&mut D>, ctx: &mut Context<'_>, capacity: usize)
+        -> Poll<io::Result<Self>>
+    {
+        let group = ready!(driver.poll_provide_group(ctx, capacity))?;
+        Poll::Ready(Ok(GroupRegisteredBuffer { group, idx: 0, buf: None, }))
+    }
+
+    unsafe fn fill(&mut self, _: &[u8]) {
+        panic!("cannot fill group registered buffer");
+    }
+
+    unsafe fn as_slice(&self) -> &[MaybeUninit<u8>] {
+        self.buf.as_ref().map_or(&[], |buf| <HeapBuffer as ProvideBuffer<D>>::as_slice(buf))
+    }
+
+    unsafe fn prepare_read(&mut self, sqe: &mut iou::SubmissionQueueEvent<'_>) {
+        let sqe = sqe.raw_mut();
+        sqe.addr = 0;
+        sqe.len = 0;
+        sqe.opcode = uring_sys::IoRingOp::IORING_OP_READ_FIXED as u8;
+        sqe.cmd_flags.rw_flags = 0;
+        sqe.buf_index.buf_index.index_or_group = self.group as _;
+    }
+
+    unsafe fn prepare_write(&mut self, _: &mut iou::SubmissionQueueEvent<'_>) {
+        panic!("cannot write into a pre-registered buffer group, only read")
+    }
+
+    unsafe fn access_from_group(&mut self, driver: Pin<&mut D>, idx: u16) {
+        self.idx = idx;
+        let idx = BufferId { upper_idx: self.group, lower_idx: idx };
+        self.buf = Some(driver.access_buffer(idx));
+    }
+
+    unsafe fn return_to_group(&mut self, driver: Pin<&mut D>) {
+        if let Some(buf) = self.buf.take() {
+            let buf = ManuallyDrop::new(buf);
+            let idx = BufferId { upper_idx: self.group, lower_idx: self.idx };
+            drop(driver.cleanup_group_buffer(buf, idx));
+        }
+    }
+
+    fn cleanup(mut this: ManuallyDrop<Self>, driver: Pin<&mut D>) -> Cancellation {
+        if let Some(buf) = this.buf.take() {
+            let buf = ManuallyDrop::new(buf);
+            let idx = BufferId { upper_idx: this.group, lower_idx: this.idx };
+            driver.cleanup_group_buffer(buf, idx)
+        } else {
+            driver.cancel_requested_buffer(this.group)
+        }
+    }
+}
+
+pub trait RegisterBufferGroup: Drive {
+    fn poll_provide_group(self: Pin<&mut Self>, ctx: &mut Context<'_>, capacity: usize)
+        -> Poll<io::Result<u16>>;
+
+    unsafe fn access_buffer(self: Pin<&mut Self>, idx: BufferId) -> HeapBuffer;
+
+    fn cleanup_group_buffer(self: Pin<&mut Self>, buf: ManuallyDrop<HeapBuffer>, idx: BufferId) -> Cancellation;
+    fn cancel_requested_buffer(self: Pin<&mut Self>, group: u16) -> Cancellation;
 }
