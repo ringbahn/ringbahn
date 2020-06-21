@@ -2,71 +2,42 @@ use std::alloc::{alloc, dealloc, handle_alloc_error, Layout};
 use std::cmp;
 use std::io;
 use std::mem::{MaybeUninit, ManuallyDrop};
+use std::ops::{Deref, DerefMut};
 use std::pin::Pin;
 use std::ptr::NonNull;
 use std::task::{Poll, Context};
 use std::slice;
 
 use crate::Cancellation;
-use super::Drive;
+use super::{Drive, RegisterBuffer, RegisterBufferGroup};
 
-/// Provide buffers for use in IO with io-uring.
-pub trait ProvideBuffer<D: Drive + ?Sized> {
-    /// Constructor for a buffer that IO will be performed into. It is possible to implement
-    /// backpressure or generate an IO error, depending on how your buffer management system works.
-    ///
-    /// The capacity argument is a request from the client for buffers of a particular capacity,
-    /// but implementers are not required to return a buffer with that capacity. It's merely a hint
-    /// at what the client would prefer.
-    fn poll_provide(driver: Pin<&mut D>, ctx: &mut Context<'_>, capacity: usize)
+/// A buffer type for read operations.
+///
+/// The most basic implementation is the [`HeapBuffer`] type, but drivers can also select the
+/// [`RegisteredBuffer`] or [`GroupRegisteredBuffer`] types if the driver implements the necessary
+/// extension trait.
+pub trait ProvideReadBuf<D: Drive + ?Sized>: ProvideBufferSealed<D> { }
+
+/// A buffer type for write operations.
+///
+/// The most basic implementation is the [`HeapBuffer`] type, but drivers can also select the
+/// [`RegisteredBuffer`] type if the driver implements the necessary extension trait.
+pub trait ProvideWriteBuf<D: Drive + ?Sized>: ProvideBufferSealed<D> { }
+
+pub trait ProvideBufferSealed<D: Drive + ?Sized> {
+    fn poll_provide(driver: Pin<&mut D>, ctx: &mut Context<'_>, capacity: u32)
         -> Poll<io::Result<Self>>
     where Self: Sized;
-
-    /// Fill the buffer with data.
-    ///
-    /// ## Safety
-    ///
-    /// This API is unsafe. Callers must guarantee that this buffer has not been prepared into an
-    /// active SQE when this method is called. The implementer can assume that it has not been.
     unsafe fn fill(&mut self, data: &[u8]);
-
-    /// Return the underlying data in the buffer.
-    ///
-    /// ## Safety
-    ///
-    /// This API is unsafe. Callers must guarantee that this buffer has not been prepared into an
-    /// active SQE when this method is called. The implementer can assume that it has not been.
     unsafe fn as_slice(&self) -> &[MaybeUninit<u8>];
-
-    /// Prepare a read using this buffer.
-    ///
-    /// The implementer is expected to set all of the data necessary to perform a read with this
-    /// type of buffer. This include setting the addr, len, and op fields, for example.
-    /// 
-    /// ## Safety
-    /// 
-    /// Similar to `Event::prepare`, callers guarantee that this buffer will not be accessed again
-    /// until after this SQE has been completed.
     unsafe fn prepare_read(&mut self, sqe: &mut iou::SubmissionQueueEvent<'_>);
-
-    /// Prepare a write using this buffer.
-    ///
-    /// The implementer is expected to set all of the data necessary to perform a write with this
-    /// type of buffer. This include setting the addr, len, and op fields, for example.
-    /// 
-    /// ## Safety
-    /// 
-    /// Similar to `Event::prepare`, callers guarantee that this buffer will not be accessed again
-    /// until after this SQE has been completed.
     unsafe fn prepare_write(&mut self, sqe: &mut iou::SubmissionQueueEvent<'_>);
-
     unsafe fn access_from_group(&mut self, driver: Pin<&mut D>, idx: u16);
     unsafe fn return_to_group(&mut self, driver: Pin<&mut D>);
-
-    /// Construct a cancellation to clean up this buffer.
     fn cleanup(this: ManuallyDrop<Self>, driver: Pin<&mut D>) -> Cancellation;
 }
 
+/// A heap-allocated buffer for performing IO.
 pub struct HeapBuffer {
     data: NonNull<MaybeUninit<u8>>,
     filled: u32,
@@ -74,27 +45,88 @@ pub struct HeapBuffer {
 }
 
 impl HeapBuffer {
-    pub unsafe fn new(data: NonNull<MaybeUninit<u8>>, capacity: u32) -> HeapBuffer {
+    pub fn with_capacity(capacity: u32) -> HeapBuffer {
+        unsafe {
+            let layout = Layout::array::<MaybeUninit<u8>>(capacity as usize).unwrap();
+            let ptr = alloc(layout);
+            if ptr.is_null() {
+                handle_alloc_error(layout);
+            }
+            HeapBuffer::from_raw(NonNull::new_unchecked(ptr).cast(), capacity)
+        }
+    }
+
+    pub unsafe fn from_raw(data: NonNull<MaybeUninit<u8>>, capacity: u32) -> HeapBuffer {
         HeapBuffer {
             data, capacity,
             filled: 0,
         }
     }
+
+    /// Returns the unitialized part of the buffer
+    pub fn filled(&self) -> &[u8] {
+        unsafe {
+            slice::from_raw_parts(self.data.cast().as_ptr(), self.filled as usize)
+        }
+    }
+
+    /// Returns the unitialized part of the buffer mutably
+    pub fn filled_mut(&mut self) -> &mut [u8] {
+        unsafe {
+            slice::from_raw_parts_mut(self.data.cast().as_ptr(), self.filled as usize)
+        }
+    }
 }
 
-impl<D: Drive + ?Sized> ProvideBuffer<D> for HeapBuffer {
-    fn poll_provide(_: Pin<&mut D>, _: &mut Context<'_>, capacity: usize)
+impl AsRef<[MaybeUninit<u8>]> for HeapBuffer {
+    fn as_ref(&self) -> &[MaybeUninit<u8>] {
+        &**self
+    }
+}
+
+impl AsMut<[MaybeUninit<u8>]> for HeapBuffer {
+    fn as_mut(&mut self) -> &mut [MaybeUninit<u8>] {
+        &mut **self
+    }
+}
+
+impl AsRef<[u8]> for HeapBuffer {
+    fn as_ref(&self) -> &[u8] {
+        self.filled()
+    }
+}
+
+impl AsMut<[u8]> for HeapBuffer {
+    fn as_mut(&mut self) -> &mut [u8] {
+        self.filled_mut()
+    }
+}
+
+impl Deref for HeapBuffer {
+    type Target = [MaybeUninit<u8>];
+    fn deref(&self) -> &[MaybeUninit<u8>] {
+        unsafe {
+            slice::from_raw_parts(self.data.as_ptr(), self.capacity as usize)
+        }
+    }
+}
+
+impl DerefMut for HeapBuffer {
+    fn deref_mut(&mut self) -> &mut [MaybeUninit<u8>] {
+        unsafe {
+            slice::from_raw_parts_mut(self.data.as_ptr(), self.capacity as usize)
+        }
+    }
+}
+
+impl<D: Drive + ?Sized> ProvideReadBuf<D> for HeapBuffer { }
+impl<D: Drive + ?Sized> ProvideWriteBuf<D> for HeapBuffer { }
+
+impl<D: Drive + ?Sized> ProvideBufferSealed<D> for HeapBuffer {
+    fn poll_provide(_: Pin<&mut D>, _: &mut Context<'_>, capacity: u32)
         -> Poll<io::Result<Self>>
     {
-        let capacity = cmp::min(capacity, u32::MAX as usize);
-        unsafe {
-            let layout = Layout::array::<MaybeUninit<u8>>(capacity).unwrap();
-            let ptr = alloc(layout);
-            if ptr.is_null() {
-                handle_alloc_error(layout);
-            }
-            Poll::Ready(Ok(HeapBuffer::new(NonNull::new_unchecked(ptr).cast(), capacity as u32)))
-        }
+        Poll::Ready(Ok(HeapBuffer::with_capacity(capacity)))
     }
 
     unsafe fn fill(&mut self, data: &[u8]) {
@@ -146,13 +178,17 @@ impl Drop for HeapBuffer {
 
 use futures_core::ready;
 
+/// A pre-registered buffer.
 pub struct RegisteredBuffer {
     buf: HeapBuffer,
     idx: BufferId,
 }
 
-impl<D: RegisterBuffer + ?Sized> ProvideBuffer<D> for RegisteredBuffer {
-    fn poll_provide(driver: Pin<&mut D>, ctx: &mut Context<'_>, capacity: usize)
+impl<D: RegisterBuffer + ?Sized> ProvideReadBuf<D> for RegisteredBuffer { }
+impl<D: RegisterBuffer + ?Sized> ProvideWriteBuf<D> for RegisteredBuffer { }
+
+impl<D: RegisterBuffer + ?Sized> ProvideBufferSealed<D> for RegisteredBuffer {
+    fn poll_provide(driver: Pin<&mut D>, ctx: &mut Context<'_>, capacity: u32)
         -> Poll<io::Result<Self>>
     {
         let (buf, idx) = ready!(driver.poll_provide_registered(ctx, capacity))?;
@@ -160,21 +196,21 @@ impl<D: RegisterBuffer + ?Sized> ProvideBuffer<D> for RegisteredBuffer {
     }
 
     unsafe fn fill(&mut self, data: &[u8]) {
-        <HeapBuffer as ProvideBuffer<D>>::fill(&mut self.buf, data)
+        <HeapBuffer as ProvideBufferSealed<D>>::fill(&mut self.buf, data)
     }
 
     unsafe fn as_slice(&self) -> &[MaybeUninit<u8>] {
-        <HeapBuffer as ProvideBuffer<D>>::as_slice(&self.buf)
+        <HeapBuffer as ProvideBufferSealed<D>>::as_slice(&self.buf)
     }
 
     unsafe fn prepare_read(&mut self, sqe: &mut iou::SubmissionQueueEvent<'_>) {
-        <HeapBuffer as ProvideBuffer<D>>::prepare_read(&mut self.buf, sqe);
+        <HeapBuffer as ProvideBufferSealed<D>>::prepare_read(&mut self.buf, sqe);
         sqe.raw_mut().opcode = uring_sys::IoRingOp::IORING_OP_READ_FIXED as _;
         sqe.raw_mut().buf_index.buf_index.index_or_group = self.idx.upper_idx as _;
     }
 
     unsafe fn prepare_write(&mut self, sqe: &mut iou::SubmissionQueueEvent<'_>) {
-        <HeapBuffer as ProvideBuffer<D>>::prepare_write(&mut self.buf, sqe);
+        <HeapBuffer as ProvideBufferSealed<D>>::prepare_write(&mut self.buf, sqe);
         sqe.raw_mut().opcode = uring_sys::IoRingOp::IORING_OP_WRITE_FIXED as _;
         sqe.raw_mut().buf_index.buf_index.index_or_group = self.idx.upper_idx as _;
     }
@@ -189,26 +225,23 @@ impl<D: RegisterBuffer + ?Sized> ProvideBuffer<D> for RegisteredBuffer {
     }
 }
 
-pub trait RegisterBuffer: Drive {
-    fn poll_provide_registered(self: Pin<&mut Self>, ctx: &mut Context<'_>, capacity: usize)
-        -> Poll<io::Result<(HeapBuffer, BufferId)>>;
-    fn cleanup_registered(self: Pin<&mut Self>, buf: ManuallyDrop<HeapBuffer>, idx: BufferId) -> Cancellation;
-}
-
 #[derive(Eq, PartialEq, Clone, Copy, Ord, PartialOrd, Hash)]
 pub struct BufferId {
     pub upper_idx: u16,
     pub lower_idx: u16,
 }
 
+/// A group pre-registered buffer.
 pub struct GroupRegisteredBuffer {
     group: u16,
     idx: u16,
     buf: Option<HeapBuffer>,
 }
 
-impl<D: RegisterBufferGroup + ?Sized> ProvideBuffer<D> for GroupRegisteredBuffer {
-    fn poll_provide(driver: Pin<&mut D>, ctx: &mut Context<'_>, capacity: usize)
+impl<D: RegisterBufferGroup + ?Sized> ProvideReadBuf<D> for GroupRegisteredBuffer { }
+
+impl<D: RegisterBufferGroup + ?Sized> ProvideBufferSealed<D> for GroupRegisteredBuffer {
+    fn poll_provide(driver: Pin<&mut D>, ctx: &mut Context<'_>, capacity: u32)
         -> Poll<io::Result<Self>>
     {
         let group = ready!(driver.poll_provide_group(ctx, capacity))?;
@@ -216,11 +249,11 @@ impl<D: RegisterBufferGroup + ?Sized> ProvideBuffer<D> for GroupRegisteredBuffer
     }
 
     unsafe fn fill(&mut self, _: &[u8]) {
-        panic!("cannot fill group registered buffer");
+        unreachable!()
     }
 
     unsafe fn as_slice(&self) -> &[MaybeUninit<u8>] {
-        self.buf.as_ref().map_or(&[], |buf| <HeapBuffer as ProvideBuffer<D>>::as_slice(buf))
+        self.buf.as_ref().map_or(&[], |buf| <HeapBuffer as ProvideBufferSealed<D>>::as_slice(buf))
     }
 
     unsafe fn prepare_read(&mut self, sqe: &mut iou::SubmissionQueueEvent<'_>) {
@@ -229,11 +262,12 @@ impl<D: RegisterBufferGroup + ?Sized> ProvideBuffer<D> for GroupRegisteredBuffer
         sqe.len = 0;
         sqe.opcode = uring_sys::IoRingOp::IORING_OP_READ_FIXED as u8;
         sqe.cmd_flags.rw_flags = 0;
+        sqe.flags &= uring_sys::IOSQE_BUFFER_SELECT;
         sqe.buf_index.buf_index.index_or_group = self.group as _;
     }
 
     unsafe fn prepare_write(&mut self, _: &mut iou::SubmissionQueueEvent<'_>) {
-        panic!("cannot write into a pre-registered buffer group, only read")
+        unreachable!()
     }
 
     unsafe fn access_from_group(&mut self, driver: Pin<&mut D>, idx: u16) {
@@ -246,7 +280,7 @@ impl<D: RegisterBufferGroup + ?Sized> ProvideBuffer<D> for GroupRegisteredBuffer
         if let Some(buf) = self.buf.take() {
             let buf = ManuallyDrop::new(buf);
             let idx = BufferId { upper_idx: self.group, lower_idx: self.idx };
-            drop(driver.cleanup_group_buffer(buf, idx));
+            driver.cleanup_group_buffer(buf, idx);
         }
     }
 
@@ -254,19 +288,10 @@ impl<D: RegisterBufferGroup + ?Sized> ProvideBuffer<D> for GroupRegisteredBuffer
         if let Some(buf) = this.buf.take() {
             let buf = ManuallyDrop::new(buf);
             let idx = BufferId { upper_idx: this.group, lower_idx: this.idx };
-            driver.cleanup_group_buffer(buf, idx)
+            driver.cleanup_group_buffer(buf, idx);
+            Cancellation::null()
         } else {
             driver.cancel_requested_buffer(this.group)
         }
     }
-}
-
-pub trait RegisterBufferGroup: Drive {
-    fn poll_provide_group(self: Pin<&mut Self>, ctx: &mut Context<'_>, capacity: usize)
-        -> Poll<io::Result<u16>>;
-
-    unsafe fn access_buffer(self: Pin<&mut Self>, idx: BufferId) -> HeapBuffer;
-
-    fn cleanup_group_buffer(self: Pin<&mut Self>, buf: ManuallyDrop<HeapBuffer>, idx: BufferId) -> Cancellation;
-    fn cancel_requested_buffer(self: Pin<&mut Self>, group: u16) -> Cancellation;
 }

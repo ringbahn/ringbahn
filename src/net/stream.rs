@@ -9,7 +9,7 @@ use futures_core::ready;
 use futures_io::{AsyncRead, AsyncBufRead, AsyncWrite};
 
 use crate::buf::Buffer;
-use crate::drive::{Drive, ProvideBuffer};
+use crate::drive::{Drive, ProvideBufferSealed};
 use crate::drive::demo::DemoDriver;
 use crate::{Ring, Submission};
 use crate::event;

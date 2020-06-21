@@ -9,7 +9,7 @@ use std::slice;
 
 use futures_core::ready;
 use crate::Cancellation;
-use crate::drive::{Drive, ProvideBuffer};
+use crate::drive::{Drive, ProvideBufferSealed};
 use crate::Ring;
 
 pub struct Buffer<D: Drive> {
@@ -114,10 +114,10 @@ impl<D: Drive> Buffer<D> {
     pub fn cancellation(&mut self, driver: Pin<&mut D>) -> Cancellation {
         let cancellation = match &mut self.storage {
             Storage::Read(buf)      => unsafe {
-                ProvideBuffer::cleanup(ManuallyDrop::new(ManuallyDrop::take(buf)), driver)
+                ProvideBufferSealed::cleanup(ManuallyDrop::new(ManuallyDrop::take(buf)), driver)
             }
             Storage::Write(buf)     => unsafe {
-                ProvideBuffer::cleanup(ManuallyDrop::new(ManuallyDrop::take(buf)), driver)
+                ProvideBufferSealed::cleanup(ManuallyDrop::new(ManuallyDrop::take(buf)), driver)
             }
             Storage::Statx(statx)   => {
                 unsafe fn callback(statx: *mut (), _: usize, _: u32) {

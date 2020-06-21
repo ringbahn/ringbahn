@@ -14,7 +14,7 @@ use futures_core::ready;
 use futures_io::{AsyncRead, AsyncBufRead, AsyncWrite, AsyncSeek};
 
 use crate::buf::Buffer;
-use crate::drive::{Drive, ProvideBuffer};
+use crate::drive::{Drive, ProvideBufferSealed};
 use crate::drive::demo::DemoDriver;
 use crate::ring::Ring;
 use crate::event::OpenAt;
