@@ -148,8 +148,8 @@ impl<D: Drive + Clone> TcpListener<D> {
         let fd = self.fd;
         let flags = 0;
         let (addr, addrlen) = self.as_mut().addr();
-        let fd = ready!(self.as_mut().ring().poll(ctx, true, |sqe| unsafe {
-            sqe.prep_accept(fd, addr, addrlen, flags);
+        let fd = ready!(self.as_mut().ring().poll(ctx, true, 1, |sqs| unsafe {
+            sqs.singular().prep_accept(fd, addr, addrlen, flags);
         }))? as RawFd;
         let addr = unsafe {
             let result = addr_from_c(&*(addr as *mut libc::sockaddr), *addrlen as usize);
@@ -215,7 +215,7 @@ impl<'a, D: Drive> Future for Close<'a, D> {
     fn poll(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<io::Result<()>> {
         self.socket.as_mut().guard_op(Op::Close);
         let fd = self.socket.fd;
-        ready!(self.socket.as_mut().ring().poll(ctx, true, |sqe| sqe.prep_close(fd)))?;
+        ready!(self.socket.as_mut().ring().poll(ctx, true, 1, |sqs| sqs.singular().prep_close(fd)))?;
         Poll::Ready(Ok(()))
     }
 }

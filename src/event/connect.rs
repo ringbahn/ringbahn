@@ -3,7 +3,7 @@ use std::os::unix::io::RawFd;
 use std::mem::ManuallyDrop;
 use std::net::SocketAddr;
 
-use super::{Event, SQE, Cancellation};
+use super::{Event, SubmissionSegment, Cancellation};
 
 pub struct Connect {
     pub fd: RawFd,
@@ -19,8 +19,10 @@ impl Connect {
 }
 
 impl Event for Connect {
-    unsafe fn prepare(&mut self, sqe: &mut SQE) {
-        sqe.prep_connect(self.fd, &mut *self.addr, self.addrlen);
+    fn sqes_needed(&self) -> u32 { 1 }
+
+    unsafe fn prepare(&mut self, sqs: &mut SubmissionSegment<'_>) {
+        sqs.singular().prep_connect(self.fd, &mut *self.addr, self.addrlen);
     }
 
     unsafe fn cancel(this: &mut ManuallyDrop<Self>) -> Cancellation {

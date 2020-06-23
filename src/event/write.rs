@@ -2,7 +2,7 @@ use std::os::unix::io::AsRawFd;
 use std::mem::ManuallyDrop;
 use std::marker::Unpin;
 
-use super::{Event, SQE, Cancellation};
+use super::{Event, SubmissionSegment, Cancellation};
 
 /// A basic write event.
 pub struct Write<'a, T> {
@@ -18,8 +18,10 @@ impl<'a, T: AsRawFd + Unpin> Write<'a, T> {
 }
 
 impl<'a, T: AsRawFd + Unpin> Event for Write<'a, T> {
-    unsafe fn prepare(&mut self, sqe: &mut SQE) {
-        sqe.prep_write(self.io.as_raw_fd(), self.buf.as_ref(), self.offset);
+    fn sqes_needed(&self) -> u32 { 1 }
+
+    unsafe fn prepare(&mut self, sqs: &mut SubmissionSegment<'_>) {
+        sqs.singular().prep_write(self.io.as_raw_fd(), self.buf.as_ref(), self.offset);
     }
 
     unsafe fn cancel(this: &mut ManuallyDrop<Self>) -> Cancellation {

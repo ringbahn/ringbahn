@@ -2,7 +2,7 @@ use std::os::unix::io::AsRawFd;
 use std::mem::ManuallyDrop;
 use std::marker::Unpin;
 
-use super::{Event, SQE, Cancellation};
+use super::{Event, SubmissionSegment, Cancellation};
 
 /// A basic read event.
 pub struct Read<'a, T> {
@@ -18,8 +18,10 @@ impl<'a, T: AsRawFd + Unpin> Read<'a, T> {
 }
 
 impl<'a, T: AsRawFd + Unpin> Event for Read<'a, T> {
-    unsafe fn prepare(&mut self, sqe: &mut SQE) {
-        sqe.prep_read(self.io.as_raw_fd(), &mut self.buf[..], self.offset);
+    fn sqes_needed(&self) -> u32 { 1 }
+
+    unsafe fn prepare(&mut self, sqs: &mut SubmissionSegment<'_>) {
+        sqs.singular().prep_read(self.io.as_raw_fd(), &mut self.buf[..], self.offset);
     }
 
     unsafe fn cancel(this: &mut ManuallyDrop<Self>) -> Cancellation {

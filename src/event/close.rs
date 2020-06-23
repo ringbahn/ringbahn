@@ -1,7 +1,7 @@
 use std::mem::ManuallyDrop;
 use std::os::unix::io::RawFd;
 
-use super::{Event, SQE, Cancellation};
+use super::{Event, SubmissionSegment, Cancellation};
 
 pub struct Close {
     fd: RawFd,
@@ -14,8 +14,10 @@ impl Close {
 }
 
 impl Event for Close {
-    unsafe fn prepare(&mut self, sqe: &mut SQE) {
-        sqe.prep_close(self.fd)
+    fn sqes_needed(&self) -> u32 { 1 }
+
+    unsafe fn prepare(&mut self, sqs: &mut SubmissionSegment<'_>) {
+        sqs.singular().prep_close(self.fd)
     }
 
     unsafe fn cancel(_: &mut ManuallyDrop<Self>) -> Cancellation {

@@ -1,15 +1,13 @@
 use std::io;
-use std::mem;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use futures_core::ready;
 
 use crate::completion::Completion;
-use crate::drive::Completion as ExternalCompletion;
 use crate::drive::Drive;
 use crate::Cancellation;
-use crate::kernel::SQE;
+use crate::kernel::SubmissionSegment;
 
 use State::*;
 
@@ -78,11 +76,12 @@ impl<D: Drive> Ring<D> {
         mut self: Pin<&mut Self>,
         ctx: &mut Context<'_>,
         is_eager: bool,
-        prepare: impl FnOnce(&mut SQE),
+        count: u32,
+        prepare: impl FnOnce(&mut SubmissionSegment<'_>),
     ) -> Poll<io::Result<u32>> {
         match self.state {
             Inert       => {
-                ready!(self.as_mut().poll_prepare(ctx, prepare));
+                ready!(self.as_mut().poll_prepare(ctx, count, prepare));
                 ready!(self.as_mut().poll_submit(ctx, is_eager));
                 Poll::Pending
             }
@@ -104,26 +103,14 @@ impl<D: Drive> Ring<D> {
     fn poll_prepare(
         self: Pin<&mut Self>,
         ctx: &mut Context<'_>,
-        prepare: impl FnOnce(&mut SQE),
+        count: u32,
+        prepare: impl FnOnce(&mut SubmissionSegment),
     ) -> Poll<()> {
         let (driver, state, completion_slot) = self.split();
-        let completion = ready!(driver.poll_prepare(ctx, 1, |sqs, ctx| {
-            struct SubmissionCleaner<'a>(&'a mut SQE);
-
-            impl Drop for SubmissionCleaner<'_> {
-                fn drop(&mut self) {
-                    self.0.prep_nop();
-                    self.0.unset_completion();
-                }
-            }
-
-            let mut sqe = SubmissionCleaner(sqs.singular());
+        let completion = ready!(driver.poll_prepare(ctx, count, |mut sqs, ctx| {
             *state = Lost;
-            prepare(&mut sqe.0);
-            let completion = Completion::new(ctx.waker().clone());
-            sqe.0.set_completion(&completion);
-            mem::forget(sqe);
-            ExternalCompletion::new(completion, ctx)
+            prepare(&mut sqs);
+            sqs.finish(ctx)
         }));
         *state = Prepared;
         *completion_slot = Some(completion.real);

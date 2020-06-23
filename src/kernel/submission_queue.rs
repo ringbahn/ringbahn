@@ -1,7 +1,12 @@
 use std::io;
+use std::mem;
 use std::sync::Arc;
+use std::task::Context;
 
-use super::{IoUring, SQE};
+use crate::completion::Completion;
+use crate::drive::Completion as ExternalCompletion;
+
+use super::{HardLinked, IoUring, SQE};
 
 pub struct SubmissionQueue {
     ring: Arc<IoUring>,
@@ -26,7 +31,7 @@ impl SubmissionQueue {
             if next - head <= *sq.kring_entries {
                 let offset = sq.sqe_tail & *sq.kring_mask;
                 sq.sqe_tail = next;
-                let head = Some(&mut *sq.sqes.offset(offset as isize));
+                let head = &mut *sq.sqes.offset(offset as isize);
                 Some(SubmissionSegment { head, remaining: n })
             } else {
                 None
@@ -37,7 +42,6 @@ impl SubmissionQueue {
     pub fn submit(&mut self) -> io::Result<u32> {
         match unsafe { uring_sys::io_uring_submit(self.ring.ring()) } {
             n if n >= 0 => {
-                println!("submitted {}", n);
                 Ok(n as u32)
             }
             n           => Err(io::Error::from_raw_os_error(-n)),
@@ -49,52 +53,49 @@ unsafe impl Send for SubmissionQueue { }
 unsafe impl Sync for SubmissionQueue { }
 
 pub struct SubmissionSegment<'a> {
-    head: Option<&'a mut uring_sys::io_uring_sqe>,
+    head: &'a mut uring_sys::io_uring_sqe,
     remaining: u32,
 }
 
 impl<'a> SubmissionSegment<'a> {
-    pub fn singular(mut self) -> &'a mut SQE {
-        while self.remaining > 1 {
-            self.consume().unwrap().prep_nop();
+    pub fn singular(&mut self) -> &mut SQE {
+        while self.consume().is_some() { }
+        SQE::from_raw(self.head)
+    }
+
+    pub fn hard_linked(&mut self) -> HardLinked<'_, 'a> {
+        HardLinked::new(self)
+    }
+
+    pub(super) fn consume(&mut self) -> Option<&mut SQE> {
+        if self.remaining > 1 {
+            // TODO replace with the proper offsetting
+            let next = unsafe { &mut *(self.head as *mut uring_sys::io_uring_sqe).offset(1) };
+            self.remaining -= 1;
+            let sqe = SQE::from_raw(mem::replace(&mut self.head, next));
+            sqe.prep_nop();
+            Some(sqe)
+        } else if self.remaining == 1 {
+            self.remaining -= 1;
+            Some(SQE::from_raw(&mut *self.head))
+        } else {
+            None
+        }
+    }
+
+    pub fn remaining(&self) -> u32 {
+        self.remaining
+    }
+
+    pub fn finish<'cx>(&mut self, ctx: &mut Context<'cx>) -> ExternalCompletion<'cx> {
+        let completion = Completion::new(ctx.waker().clone());
+        SQE::from_raw(self.head).set_completion(&completion);
+
+        if self.remaining != 0 {
+            self.head.flags &= !(uring_sys::IOSQE_IO_LINK & uring_sys::IOSQE_IO_HARDLINK);
+            while self.consume().is_some() { }
         }
 
-        self.consume().unwrap()
-    }
-
-    pub fn hard_linked(self) -> HardLinked<'a> {
-        HardLinked { segment: self }
-    }
-
-    fn consume(&mut self) -> Option<&'a mut SQE> {
-        let next = self.head.take()?;
-
-        self.remaining -= 1;
-        if self.remaining > 0 {
-            unsafe {
-                let sqe = (next as *mut uring_sys::io_uring_sqe).offset(1);
-                self.head = Some(&mut *sqe);
-            }
-        }
-
-        Some(SQE::from_raw(next))
-    }
-}
-
-pub struct HardLinked<'a> {
-    segment: SubmissionSegment<'a>,
-}
-
-impl<'a> Iterator for HardLinked<'a> {
-    type Item = &'a mut SQE;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        // TODO after the user is done with it, if there are remaining SQEs, I want to set
-        // IORING_SQE_HARDLINK
-        //
-        // Make sure that all of the unused are filled with noops
-        //
-        // Make it so the completion is only set on the final SQE somehow
-        self.segment.consume()
+        ExternalCompletion::new(completion, ctx)
     }
 }
