@@ -19,3 +19,5 @@ pub use drive::Drive;
 pub use event::Event;
 #[doc(inline)]
 pub use fs::File;
+
+pub mod kernel;

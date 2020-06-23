@@ -6,6 +6,7 @@ use std::task::Waker;
 use parking_lot::Mutex;
 
 use crate::Cancellation;
+use crate::kernel::CQE;
 
 use State::*;
 
@@ -26,7 +27,7 @@ pub struct Completion {
 
 enum State {
     Submitted(Waker),
-    Completed(io::Result<usize>),
+    Completed(io::Result<u32>),
     Cancelled(Cancellation),
     Empty,
 }
@@ -49,7 +50,7 @@ impl Completion {
     /// Check if the completion has completed. If it has, the result of the completion will be
     /// returned and the completion will be deallocated. If it has not been completed, the waker
     /// field will be updated to the new waker if the old waker would not wake the same task.
-    pub fn check(self, waker: &Waker) -> Result<io::Result<usize>, Completion> {
+    pub fn check(self, waker: &Waker) -> Result<io::Result<u32>, Completion> {
         let mut state = self.state.lock();
         match mem::replace(&mut *state, State::Empty) {
             Submitted(old_waker)    => {
@@ -85,25 +86,12 @@ impl Completion {
     }
 }
 
-/// Complete an `[iou::CompletionQueueEvent]` which was constructed from a [`Completion`].
-///
-/// This function should be used in combination with a driver that implements [`Drive`] to process
-/// events on an io-uring instance. This function takes a CQE and processes it.
-///
-/// ## Safety
-///
-/// This function is only valid if the user_data in the CQE is null, the liburing timeout
-/// signifier, or a pointer to a Completion constructed using ringbahn. If you have scheduled any
-/// events on the io-uring instance using a library other than ringbahn, this method is not safe to
-/// call unless you have filtered those events out in some manner.
-pub unsafe fn complete(cqe: iou::CompletionQueueEvent) {
-    if cqe.is_timeout() { return; }
-
+pub(crate) fn complete(cqe: CQE) {
     let result = cqe.result();
     let completion = cqe.user_data() as *mut Mutex<State>;
 
     if completion != ptr::null_mut() {
-        let state: &Mutex<State> = &*completion;
+        let state: &Mutex<State> = unsafe { &*completion };
         let mut state = state.lock();
         match mem::replace(&mut *state, State::Empty) {
             Submitted(waker)    => {
@@ -111,9 +99,11 @@ pub unsafe fn complete(cqe: iou::CompletionQueueEvent) {
                 waker.wake();
             }
             Cancelled(callback) => {
-                drop(callback);
-                drop(state);
-                drop(Box::from_raw(completion));
+                unsafe {
+                    drop(callback);
+                    drop(state);
+                    drop(Box::from_raw(completion));
+                }
             }
             _                   => unreachable!()
         }

@@ -10,7 +10,7 @@ fn main() -> io::Result<()> {
     let submission = Submission::new(event, driver);
     let content = futures::executor::block_on(async move {
         let (event, result) = submission.await;
-        let bytes_read = result?;
+        let bytes_read = result? as usize;
         let s = String::from_utf8_lossy(&event.buf[0..bytes_read]).to_string();
         io::Result::Ok(s)
     })?;

@@ -3,7 +3,7 @@ use std::os::unix::io::RawFd;
 use std::mem::ManuallyDrop;
 use std::net::SocketAddr;
 
-use super::{Event, Cancellation};
+use super::{Event, SQE, Cancellation};
 
 pub struct Connect {
     pub fd: RawFd,
@@ -19,9 +19,8 @@ impl Connect {
 }
 
 impl Event for Connect {
-    unsafe fn prepare(&mut self, sqe: &mut iou::SubmissionQueueEvent<'_>) {
-        let addr = &mut *self.addr as *mut libc::sockaddr_storage as *mut libc::sockaddr;
-        uring_sys::io_uring_prep_connect(sqe.raw_mut(), self.fd, addr, self.addrlen);
+    unsafe fn prepare(&mut self, sqe: &mut SQE) {
+        sqe.prep_connect(self.fd, &mut *self.addr, self.addrlen);
     }
 
     unsafe fn cancel(this: &mut ManuallyDrop<Self>) -> Cancellation {

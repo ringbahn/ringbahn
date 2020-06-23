@@ -4,7 +4,7 @@ use std::os::unix::io::RawFd;
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 
-use super::{Event, Cancellation};
+use super::{Event, SQE, Cancellation};
 
 pub struct OpenAt {
     path: CString,
@@ -21,9 +21,8 @@ impl OpenAt {
 }
 
 impl Event for OpenAt {
-    unsafe fn prepare(&mut self, sqe: &mut iou::SubmissionQueueEvent<'_>) {
-        let path = self.path.as_ptr();
-        uring_sys::io_uring_prep_openat(sqe.raw_mut(), self.dfd, path, self.flags, self.mode);
+    unsafe fn prepare(&mut self, sqe: &mut SQE) {
+        sqe.prep_openat(self.dfd, self.path.as_ptr(), self.flags, self.mode)
     }
 
     unsafe fn cancel(this: &mut ManuallyDrop<Self>) -> Cancellation {

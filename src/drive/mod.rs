@@ -8,8 +8,9 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use crate::completion;
+use crate::completion::complete;
+use crate::kernel::SQE;
 
-pub use crate::completion::complete;
 
 /// A ccompletion which will be used to wake the task waiting on this event.
 ///
@@ -34,10 +35,9 @@ impl<'cx> Completion<'cx> {
 pub trait Drive {
     /// Prepare an event on the submission queue.
     ///
-    /// The implementer is responsible for provisioning an [`iou::SubmissionQueueEvent`] from the
-    /// submission  queue. Once an SQE is available, the implementer should pass it to the
-    /// `prepare` callback, which constructs a [`Completion`], and return that `Completion` to the
-    /// caller.
+    /// The implementer is responsible for provisioning an [`SQE`] from the submission  queue.
+    /// Once an SQE is available, the implementer should pass it to the `prepare` callback, which
+    /// constructs a [`Completion`], and return that `Completion` to the caller.
     ///
     /// If the driver is not ready to recieve more events, it can return `Poll::Pending`. If it
     /// does, it must register a waker to wake the task when more events can be prepared, otherwise
@@ -48,7 +48,7 @@ pub trait Drive {
     fn poll_prepare<'cx>(
         self: Pin<&mut Self>,
         ctx: &mut Context<'cx>,
-        prepare: impl FnOnce(iou::SubmissionQueueEvent<'_>, &mut Context<'cx>) -> Completion<'cx>,
+        prepare: impl FnOnce(&mut SQE, &mut Context<'cx>) -> Completion<'cx>,
     ) -> Poll<Completion<'cx>>;
 
     /// Submit all of the events on the submission queue.
@@ -69,5 +69,5 @@ pub trait Drive {
         self: Pin<&mut Self>,
         ctx: &mut Context<'_>,
         eager: bool,
-    ) -> Poll<io::Result<usize>>;
+    ) -> Poll<io::Result<u32>>;
 }
