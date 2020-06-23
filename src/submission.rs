@@ -40,7 +40,7 @@ impl<E, D> Future for Submission<E, D> where
     E: Event,
     D: Drive,
 {
-    type Output = (E, io::Result<usize>);
+    type Output = (E, io::Result<u32>);
 
     fn poll(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<Self::Output> {
         let (ring, event) = self.split();

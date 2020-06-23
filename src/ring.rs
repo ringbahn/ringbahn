@@ -9,6 +9,7 @@ use crate::completion::Completion;
 use crate::drive::Completion as ExternalCompletion;
 use crate::drive::Drive;
 use crate::Cancellation;
+use crate::kernel::SQE;
 
 use State::*;
 
@@ -77,8 +78,8 @@ impl<D: Drive> Ring<D> {
         mut self: Pin<&mut Self>,
         ctx: &mut Context<'_>,
         is_eager: bool,
-        prepare: impl FnOnce(&mut iou::SubmissionQueueEvent<'_>),
-    ) -> Poll<io::Result<usize>> {
+        prepare: impl FnOnce(&mut SQE),
+    ) -> Poll<io::Result<u32>> {
         match self.state {
             Inert       => {
                 ready!(self.as_mut().poll_prepare(ctx, prepare));
@@ -103,18 +104,16 @@ impl<D: Drive> Ring<D> {
     fn poll_prepare(
         self: Pin<&mut Self>,
         ctx: &mut Context<'_>,
-        prepare: impl FnOnce(&mut iou::SubmissionQueueEvent<'_>),
+        prepare: impl FnOnce(&mut SQE),
     ) -> Poll<()> {
         let (driver, state, completion_slot) = self.split();
         let completion = ready!(driver.poll_prepare(ctx, |sqe, ctx| {
-            struct SubmissionCleaner<'a>(iou::SubmissionQueueEvent<'a>);
+            struct SubmissionCleaner<'a>(&'a mut SQE);
 
             impl Drop for SubmissionCleaner<'_> {
                 fn drop(&mut self) {
-                    unsafe {
-                        self.0.prep_nop();
-                        self.0.set_user_data(0);
-                    }
+                    self.0.prep_nop();
+                    self.0.unset_completion();
                 }
             }
 
@@ -122,7 +121,7 @@ impl<D: Drive> Ring<D> {
             *state = Lost;
             prepare(&mut sqe.0);
             let completion = Completion::new(ctx.waker().clone());
-            sqe.0.set_user_data(completion.addr());
+            sqe.0.set_completion(&completion);
             mem::forget(sqe);
             ExternalCompletion::new(completion, ctx)
         }));
@@ -141,7 +140,7 @@ impl<D: Drive> Ring<D> {
     }
 
     #[inline(always)]
-    fn poll_complete(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<io::Result<usize>> {
+    fn poll_complete(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<io::Result<u32>> {
         let (_, state, completion_slot) = self.split();
         match completion_slot.take().unwrap().check(ctx.waker()) {
             Ok(result)      => {

@@ -17,11 +17,13 @@ use access_queue::*;
 
 use super::{Drive, Completion};
 
-static SQ: Lazy<AccessQueue<Mutex<iou::SubmissionQueue<'static>>>> = Lazy::new(init_sq);
+use crate::kernel::*;
+
+static SQ: Lazy<AccessQueue<Mutex<SubmissionQueue>>> = Lazy::new(init_sq);
 
 /// The driver handle
 pub struct DemoDriver<'a> {
-    sq: Access<'a, Mutex<iou::SubmissionQueue<'static>>>,
+    sq: Access<'a, Mutex<SubmissionQueue>>,
 }
 
 impl Default for DemoDriver<'_> {
@@ -40,7 +42,7 @@ impl Drive for DemoDriver<'_> {
     fn poll_prepare<'cx>(
         mut self: Pin<&mut Self>,
         ctx: &mut Context<'cx>,
-        prepare: impl FnOnce(iou::SubmissionQueueEvent<'_>, &mut Context<'cx>) -> Completion<'cx>,
+        prepare: impl FnOnce(&mut SQE, &mut Context<'cx>) -> Completion<'cx>,
     ) -> Poll<Completion<'cx>> {
         // Wait for access to prepare. When ready, create a new Access future to wait next time we
         // want to prepare with this driver, and lock the SQ.
@@ -51,8 +53,8 @@ impl Drive for DemoDriver<'_> {
         self.sq = access;
         let mut sq = sq.lock();
         loop {
-            match sq.next_sqe() {
-                Some(sqe)   => return Poll::Ready(prepare(sqe, ctx)),
+            match sq.prepare(1) {
+                Some(sqs)   => return Poll::Ready(prepare(sqs.singular(), ctx)),
                 None        => { let _ = sq.submit(); }
             }
         }
@@ -62,7 +64,7 @@ impl Drive for DemoDriver<'_> {
         self: Pin<&mut Self>,
         _: &mut Context<'_>,
         eager: bool,
-    ) -> Poll<io::Result<usize>> {
+    ) -> Poll<io::Result<u32>> {
         let result = if eager {
             self.sq.skip_queue().lock().submit()
         } else {
@@ -77,22 +79,19 @@ pub fn driver() -> DemoDriver<'static> {
     DemoDriver { sq: SQ.access() }
 }
 
-fn init_sq() -> AccessQueue<Mutex<iou::SubmissionQueue<'static>>> {
-    unsafe {
-        static mut RING: Option<iou::IoUring> = None;
-        RING = Some(iou::IoUring::new(SQ_ENTRIES).expect("TODO handle io_uring_init failure"));
-        let (sq, cq, _) = RING.as_mut().unwrap().queues();
-        thread::spawn(move || complete(cq));
-        AccessQueue::new(Mutex::new(sq), CQ_ENTRIES)
-    }
+fn init_sq() -> AccessQueue<Mutex<SubmissionQueue>> {
+    let ring = IoUring::new(SQ_ENTRIES).expect("TODO handle io_uring_init failure");
+    let (sq, cq) = ring.queues();
+    thread::spawn(move || complete(cq));
+    AccessQueue::new(Mutex::new(sq), CQ_ENTRIES)
 }
 
-unsafe fn complete(mut cq: iou::CompletionQueue<'static>) {
+fn complete(mut cq: CompletionQueue) {
     while let Ok(cqe) = cq.wait_for_cqe() {
         let mut ready = cq.ready() as usize + 1;
         SQ.release(ready);
 
-        super::complete(cqe);
+        super::complete(cqe.into());
         ready -= 1;
 
         while let Some(cqe) = cq.peek_for_cqe() {
@@ -101,7 +100,7 @@ unsafe fn complete(mut cq: iou::CompletionQueue<'static>) {
                 SQ.release(ready);
             }
 
-            super::complete(cqe);
+            super::complete(cqe.into());
             ready -= 1;
         }
 

@@ -12,7 +12,7 @@ fn write_file() {
     let mut file = tempfile::tempfile().unwrap();
     let write: Write<'_, File> = Write::new(&file, Vec::from(ASSERT), 0);
     let (_, result) = futures::executor::block_on(Submission::new(write, demo::driver()));
-    assert_eq!(result.unwrap(), ASSERT.len());
+    assert_eq!(result.unwrap() as usize, ASSERT.len());
 
     let mut buf = vec![];
     assert_eq!(file.read_to_end(&mut buf).unwrap(), ASSERT.len());

@@ -11,6 +11,7 @@ mod writev;
 use std::mem::ManuallyDrop;
 
 use crate::cancellation::Cancellation;
+use crate::kernel::SQE;
 
 pub use connect::Connect;
 pub use close::Close;
@@ -51,7 +52,7 @@ pub trait Event {
     /// In essence implementing prepare, users can write code ass if any heap addresses passed to
     /// the  kernel have passed ownership of that data to the kernel for the time that the event is
     /// completed.
-    unsafe fn prepare(&mut self, sqe: &mut iou::SubmissionQueueEvent<'_>);
+    unsafe fn prepare(&mut self, sqe: &mut SQE);
 
     /// Return the cancellation callback for this event.
     ///
