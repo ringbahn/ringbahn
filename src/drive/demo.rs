@@ -42,7 +42,8 @@ impl Drive for DemoDriver<'_> {
     fn poll_prepare<'cx>(
         mut self: Pin<&mut Self>,
         ctx: &mut Context<'cx>,
-        prepare: impl FnOnce(&mut SQE, &mut Context<'cx>) -> Completion<'cx>,
+        count: u32,
+        prepare: impl FnOnce(SubmissionSegment<'_>, &mut Context<'cx>) -> Completion<'cx>,
     ) -> Poll<Completion<'cx>> {
         // Wait for access to prepare. When ready, create a new Access future to wait next time we
         // want to prepare with this driver, and lock the SQ.
@@ -53,8 +54,8 @@ impl Drive for DemoDriver<'_> {
         self.sq = access;
         let mut sq = sq.lock();
         loop {
-            match sq.prepare(1) {
-                Some(sqs)   => return Poll::Ready(prepare(sqs.singular(), ctx)),
+            match sq.prepare(count) {
+                Some(sqs)   => return Poll::Ready(prepare(sqs, ctx)),
                 None        => { let _ = sq.submit(); }
             }
         }

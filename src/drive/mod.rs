@@ -9,7 +9,7 @@ use std::task::{Context, Poll};
 
 use crate::completion;
 use crate::completion::complete;
-use crate::kernel::SQE;
+use crate::kernel::SubmissionSegment;
 
 
 /// A completion which will be used to wake the task waiting on this event.
@@ -55,7 +55,8 @@ pub trait Drive {
     fn poll_prepare<'cx>(
         self: Pin<&mut Self>,
         ctx: &mut Context<'cx>,
-        prepare: impl FnOnce(&mut SQE, &mut Context<'cx>) -> Completion<'cx>,
+        count: u32,
+        prepare: impl FnOnce(SubmissionSegment<'_>, &mut Context<'cx>) -> Completion<'cx>,
     ) -> Poll<Completion<'cx>>;
 
     /// Submit all of the events on the submission queue.
