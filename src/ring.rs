@@ -107,7 +107,7 @@ impl<D: Drive> Ring<D> {
         prepare: impl FnOnce(&mut SQE),
     ) -> Poll<()> {
         let (driver, state, completion_slot) = self.split();
-        let completion = ready!(driver.poll_prepare(ctx, |sqe, ctx| {
+        let completion = ready!(driver.poll_prepare(ctx, 1, |sqs, ctx| {
             struct SubmissionCleaner<'a>(&'a mut SQE);
 
             impl Drop for SubmissionCleaner<'_> {
@@ -117,7 +117,7 @@ impl<D: Drive> Ring<D> {
                 }
             }
 
-            let mut sqe = SubmissionCleaner(sqe);
+            let mut sqe = SubmissionCleaner(sqs.singular());
             *state = Lost;
             prepare(&mut sqe.0);
             let completion = Completion::new(ctx.waker().clone());
