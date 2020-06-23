@@ -209,16 +209,34 @@ impl<D: Drive> AsyncSeek for File<D> {
     fn poll_seek(mut self: Pin<&mut Self>, ctx: &mut Context, pos: io::SeekFrom)
         -> Poll<io::Result<u64>>
     {
-        match pos {
-            io::SeekFrom::Start(n)      => *self.as_mut().pos() = n as usize,
-            io::SeekFrom::Current(n)    => {
-                *self.as_mut().pos() += if n < 0 { n.abs() } else { n } as usize;
+        let (whence, offset) = match pos {
+            io::SeekFrom::Start(n) => {
+                *self.as_mut().pos() = n as usize;
+                return Poll::Ready(Ok(self.pos as u64));
             }
-            io::SeekFrom::End(n)        => {
-                let end = ready!(self.as_mut().poll_file_size(ctx))?;
-                *self.as_mut().pos() = end + if n < 0 { n.abs() } else { n} as usize;
+            io::SeekFrom::Current(n) => (self.pos, n),
+            io::SeekFrom::End(n)     => {
+                (ready!(self.as_mut().poll_file_size(ctx))?, n)
             }
-        }
+        };
+        let valid_seek = if offset.is_negative() {
+            match whence.checked_sub(offset.abs() as usize) {
+                Some(valid_seek) => valid_seek,
+                None => {
+                    let invalid = io::Error::from(io::ErrorKind::InvalidInput);
+                    return Poll::Ready(Err(invalid));
+                }
+            }
+        } else {
+            match whence.checked_add(offset as usize) {
+                Some(valid_seek) => valid_seek,
+                None => {
+                    let overflow = io::Error::from_raw_os_error(libc::EOVERFLOW);
+                    return Poll::Ready(Err(overflow));
+                }
+            }
+        };
+        *self.as_mut().pos() = valid_seek;
         Poll::Ready(Ok(self.pos as u64))
     }
 }
@@ -289,4 +307,3 @@ impl<D: Drive + Clone> Future for Create<D> {
         Poll::Ready(Ok(File::from_fd(fd, driver)))
     }
 }
-
