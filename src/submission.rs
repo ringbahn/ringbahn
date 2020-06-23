@@ -46,7 +46,9 @@ impl<E, D> Future for Submission<E, D> where
         let (ring, event) = self.split();
 
         let result = if let Some(event) = event {
-            ready!(ring.poll(ctx, event.is_eager(), |sqe| unsafe { event.prepare(sqe) }))
+            let is_eager = event.is_eager();
+            let count = event.sqes_needed();
+            ready!(ring.poll(ctx, is_eager, count, |sqs| unsafe { event.prepare(sqs) }))
         } else {
             panic!("polled Submission after completion")
         };

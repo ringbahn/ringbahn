@@ -92,7 +92,7 @@ fn complete(mut cq: CompletionQueue) {
         let mut ready = cq.ready() as usize + 1;
         SQ.release(ready);
 
-        super::complete(cqe.into());
+        cqe.complete();
         ready -= 1;
 
         while let Some(cqe) = cq.peek_for_cqe() {

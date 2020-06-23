@@ -4,7 +4,7 @@ use std::os::unix::io::RawFd;
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 
-use super::{Event, SQE, Cancellation};
+use super::{Event, SubmissionSegment, Cancellation};
 
 pub struct OpenAt {
     path: CString,
@@ -21,8 +21,10 @@ impl OpenAt {
 }
 
 impl Event for OpenAt {
-    unsafe fn prepare(&mut self, sqe: &mut SQE) {
-        sqe.prep_openat(self.dfd, self.path.as_ptr(), self.flags, self.mode)
+    fn sqes_needed(&self) -> u32 { 1 }
+
+    unsafe fn prepare(&mut self, sqs: &mut SubmissionSegment<'_>) {
+        sqs.singular().prep_openat(self.dfd, self.path.as_ptr(), self.flags, self.mode)
     }
 
     unsafe fn cancel(this: &mut ManuallyDrop<Self>) -> Cancellation {

@@ -116,7 +116,7 @@ impl<D: Drive> File<D> {
         let flags = libc::AT_EMPTY_PATH;
         let mask = libc::STATX_SIZE;
         unsafe {
-            ready!(ring.poll(ctx, true, |sqe| sqe.prep_statx(fd, &EMPTY, flags, mask, statx)))?;
+            ready!(ring.poll(ctx, true, 1, |sqs| sqs.singular().prep_statx(fd, &EMPTY, flags, mask, statx)))?;
             Poll::Ready(Ok((*statx).stx_size))
         }
     }
@@ -162,7 +162,7 @@ impl<D: Drive> AsyncBufRead for File<D> {
         let fd = self.fd;
         let (ring, buf, pos) = self.split();
         buf.fill_buf(|buf| {
-            let n = ready!(ring.poll(ctx, true, |sqe| unsafe { sqe.prep_read(fd, buf, *pos) }))?;
+            let n = ready!(ring.poll(ctx, true, 1, |sqs| unsafe { sqs.singular().prep_read(fd, buf, *pos) }))?;
             *pos += n as u64;
             Poll::Ready(Ok(n as u32))
         })
@@ -181,7 +181,7 @@ impl<D: Drive> AsyncWrite for File<D> {
         let data = ready!(buf.fill_buf(|mut buf| {
             Poll::Ready(Ok(io::Write::write(&mut buf, slice)? as u32))
         }))?;
-        let n = ready!(ring.poll(ctx, true, |sqe| unsafe { sqe.prep_write(fd, data, *pos) }))?;
+        let n = ready!(ring.poll(ctx, true, 1, |sqs| unsafe { sqs.singular().prep_write(fd, data, *pos) }))?;
         *pos += n as u64;
         buf.clear();
         Poll::Ready(Ok(n as usize))
@@ -195,7 +195,7 @@ impl<D: Drive> AsyncWrite for File<D> {
     fn poll_close(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<io::Result<()>> {
         self.as_mut().guard_op(Op::Close);
         let fd = self.fd;
-        ready!(self.ring().poll(ctx, true, |sqe| sqe.prep_close(fd)))?;
+        ready!(self.ring().poll(ctx, true, 1, |sqs| sqs.singular().prep_close(fd)))?;
         Poll::Ready(Ok(()))
     }
 }

@@ -18,10 +18,6 @@ impl SQE {
         self.inner.user_data = completion.addr();
     }
 
-    pub(crate) fn unset_completion(&mut self) {
-        self.inner.user_data = 0;
-    }
-
     pub fn prep_nop(&mut self) {
         unsafe { uring_sys::io_uring_prep_nop(&mut self.inner) };
     }
@@ -56,5 +52,13 @@ impl SQE {
 
     pub fn prep_close(&mut self, fd: RawFd) {
         unsafe { uring_sys::io_uring_prep_close(&mut self.inner, fd); }
+    }
+
+    pub fn set_flag(&mut self, flag: u8) {
+        self.inner.flags &= flag;
+    }
+
+    pub fn unset_flag(&mut self, flag: u8) {
+        self.inner.flags &= !flag;
     }
 }
