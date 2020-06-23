@@ -7,7 +7,7 @@ pub struct CQE {
 }
 
 impl CQE {
-    pub(crate) fn from_raw(cqe: uring_sys::io_uring_cqe) -> CQE {
+    pub(super) fn from_raw(cqe: uring_sys::io_uring_cqe) -> CQE {
         CQE { user_data: cqe.user_data, res: cqe.res, flags: cqe.flags }
     }
 

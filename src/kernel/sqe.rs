@@ -9,7 +9,7 @@ pub struct SQE {
 }
 
 impl SQE {
-    pub(crate) fn from_raw(sqe: &mut uring_sys::io_uring_sqe) -> &mut SQE {
+    pub(super) fn from_raw(sqe: &mut uring_sys::io_uring_sqe) -> &mut SQE {
         sqe.user_data = 0;
         unsafe { &mut *NonNull::from(sqe).cast().as_ptr() }
     }
