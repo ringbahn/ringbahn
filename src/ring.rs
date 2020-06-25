@@ -1,4 +1,5 @@
 use std::io;
+use std::mem;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
@@ -25,18 +26,17 @@ use State::*;
 /// implementing drop to call cancel properly.
 pub struct Ring<D: Drive> {
     state: State,
-    completion: Option<Completion>,
     driver: D,
 }
 
-
-#[derive(Debug, Eq, PartialEq)]
 enum State {
-    Inert = 0,
-    Prepared,
-    Submitted,
+    Inert,
+    Prepared(Completion),
+    Submitted(Completion),
+    Cancelled(u64),
     Lost,
 }
+
 
 impl<D: Default + Drive> Default for Ring<D> {
     fn default() -> Ring<D> {
@@ -56,7 +56,6 @@ impl<D: Drive> Ring<D> {
     pub fn new(driver: D) -> Ring<D> {
         Ring {
             state: Inert,
-            completion: None,
             driver
         }
     }
@@ -80,12 +79,12 @@ impl<D: Drive> Ring<D> {
         prepare: impl FnOnce(&mut SubmissionSegment<'_>),
     ) -> Poll<io::Result<u32>> {
         match self.state {
-            Inert       => {
+            Inert | Cancelled(_) => {
                 ready!(self.as_mut().poll_prepare(ctx, count, prepare));
                 ready!(self.as_mut().poll_submit(ctx, is_eager));
                 Poll::Pending
             }
-            Prepared    => {
+            Prepared(_)             => {
                 match self.as_mut().poll_complete(ctx) {
                     ready @ Poll::Ready(..) => ready,
                     Poll::Pending           => {
@@ -94,8 +93,8 @@ impl<D: Drive> Ring<D> {
                     }
                 }
             }
-            Submitted   => self.poll_complete(ctx),
-            Lost        => panic!("Ring in a bad state; driver is faulty"),
+            Submitted(_)            => self.poll_complete(ctx),
+            Lost                    => panic!("Ring in a bad state; driver is faulty"),
         }
     }
 
@@ -106,38 +105,71 @@ impl<D: Drive> Ring<D> {
         count: u32,
         prepare: impl FnOnce(&mut SubmissionSegment),
     ) -> Poll<()> {
-        let (driver, state, completion_slot) = self.split();
-        let completion = ready!(driver.poll_prepare(ctx, count, |mut sqs, ctx| {
-            *state = Lost;
-            prepare(&mut sqs);
-            sqs.finish(ctx)
-        }));
-        *state = Prepared;
-        *completion_slot = Some(completion.real);
+        let (driver, state) = self.split();
+        let completion = match *state {
+            Cancelled(prev) => {
+                ready!(driver.poll_prepare(ctx, count + 1, |mut sqs, ctx| {
+                    *state = Lost;
+                    sqs.hard_linked().next().unwrap().prep_cancel(prev, 0);
+                    prepare(&mut sqs);
+                    sqs.finish(ctx)
+                }))
+            }
+            Inert           => {
+                ready!(driver.poll_prepare(ctx, count, |mut sqs, ctx| {
+                    *state = Lost;
+                    prepare(&mut sqs);
+                    sqs.finish(ctx)
+                }))
+            }
+            _               => unreachable!(),
+        };
+        *state = Prepared(completion.real);
         Poll::Ready(())
     }
 
     #[inline(always)]
     fn poll_submit(self: Pin<&mut Self>, ctx: &mut Context<'_>, is_eager: bool) -> Poll<()> {
-        let (driver, state, _) = self.split();
+        let (driver, state) = self.split();
         // TODO figure out how to handle this result
         let _ = ready!(driver.poll_submit(ctx, is_eager));
-        *state = Submitted;
-        Poll::Ready(())
+        if let Prepared(completion) | Submitted(completion) = mem::replace(state, Lost) {
+            *state = Submitted(completion);
+            Poll::Ready(())
+        } else {
+            unreachable!()
+        }
     }
 
     #[inline(always)]
     fn poll_complete(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<io::Result<u32>> {
-        let (_, state, completion_slot) = self.split();
-        match completion_slot.take().unwrap().check(ctx.waker()) {
-            Ok(result)      => {
-                *state = Inert;
-                Poll::Ready(result)
+        let (_, state) = self.split();
+        match mem::replace(state, Lost) {
+            Prepared(completion)    => {
+                match completion.check(ctx.waker()) {
+                    Ok(result)      => {
+                        *state = Inert;
+                        Poll::Ready(result)
+                    }
+                    Err(completion) => {
+                        *state = Prepared(completion);
+                        Poll::Pending
+                    }
+                }
             }
-            Err(completion) => {
-                *completion_slot = Some(completion);
-                Poll::Pending
+            Submitted(completion)   => {
+                match completion.check(ctx.waker()) {
+                    Ok(result)      => {
+                        *state = Inert;
+                        Poll::Ready(result)
+                    }
+                    Err(completion) => {
+                        *state = Submitted(completion);
+                        Poll::Pending
+                    }
+                }
             }
+            _                       => unreachable!(),
         }
     }
 
@@ -147,8 +179,14 @@ impl<D: Drive> Ring<D> {
     /// clean up the resources of the running event.
     #[inline]
     pub fn cancel(&mut self, cancellation: Cancellation) {
-        if let Some(completion) = self.completion.take() {
-            completion.cancel(cancellation);
+        match mem::replace(&mut self.state, Lost) {
+            Prepared(completion) | Submitted(completion) => {
+                self.state = Cancelled(completion.addr());
+                completion.cancel(cancellation);
+            }
+            state                                       => {
+                self.state = state;
+            }
         }
     }
 
@@ -159,10 +197,10 @@ impl<D: Drive> Ring<D> {
         unsafe { Pin::get_unchecked_mut(self).cancel(cancellation) }
     }
 
-    fn split(self: Pin<&mut Self>) -> (Pin<&mut D>, &mut State, &mut Option<Completion>) {
+    fn split(self: Pin<&mut Self>) -> (Pin<&mut D>, &mut State) {
         unsafe {
             let this = Pin::get_unchecked_mut(self);
-            (Pin::new_unchecked(&mut this.driver), &mut this.state, &mut this.completion)
+            (Pin::new_unchecked(&mut this.driver), &mut this.state)
         }
     }
 }

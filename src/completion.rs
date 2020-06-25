@@ -75,6 +75,7 @@ impl Completion {
         match &*state {
             Submitted(_)    => {
                 *state = Cancelled(callback);
+                drop(state);
             }
             Completed(_)    => {
                 drop(callback);
