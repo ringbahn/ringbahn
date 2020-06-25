@@ -54,6 +54,10 @@ impl SQE {
         unsafe { uring_sys::io_uring_prep_close(&mut self.inner, fd); }
     }
 
+    pub fn prep_cancel(&mut self, user_data: u64, flags: i32) {
+        unsafe { uring_sys::io_uring_prep_cancel(&mut self.inner, user_data as _, flags) }
+    }
+
     pub fn set_flag(&mut self, flag: u8) {
         self.inner.flags &= flag;
     }
