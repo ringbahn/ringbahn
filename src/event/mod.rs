@@ -3,6 +3,7 @@
 mod connect;
 mod close;
 mod read;
+mod readv;
 mod openat;
 mod write;
 
@@ -13,6 +14,7 @@ use crate::cancellation::Cancellation;
 pub use connect::Connect;
 pub use close::Close;
 pub use read::Read;
+pub use readv::ReadV;
 pub use openat::OpenAt;
 pub use write::Write;
 
