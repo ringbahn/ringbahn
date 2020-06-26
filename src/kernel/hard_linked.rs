@@ -1,16 +1,23 @@
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
+use std::ptr::NonNull;
 
 use super::{SubmissionSegment, SQE};
 
 pub struct HardLinked<'a, 'b> {
-    segment: *mut SubmissionSegment<'b>,
+    segment: NonNull<SubmissionSegment<'b>>,
     marker: PhantomData<&'a mut SubmissionSegment<'b>>,
 }
 
 impl<'a, 'b> HardLinked<'a, 'b> {
     pub(super) fn new(segment: &'a mut SubmissionSegment<'b>) -> HardLinked<'a, 'b> {
-        HardLinked { segment, marker: PhantomData }
+        HardLinked { segment: NonNull::from(segment), marker: PhantomData }
+    }
+
+    pub fn finish(self) -> Option<&'a mut SQE> {
+        unsafe {
+            (&mut *self.segment.as_ptr()).consume()
+        }
     }
 }
 
@@ -19,8 +26,8 @@ impl<'a, 'b> Iterator for HardLinked<'a, 'b> {
 
     fn next(&mut self) -> Option<Self::Item> {
         unsafe {
-            let is_final = (&*self.segment).remaining() > 1;
-            let sqe = (&mut *self.segment).consume()?;
+            let sqe = (&mut *self.segment.as_ptr()).consume()?;
+            let is_final = self.segment.as_ref().remaining() == 0;
             Some(HardLinkedSQE { sqe, is_final })
         }
     }

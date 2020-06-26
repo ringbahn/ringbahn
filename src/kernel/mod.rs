@@ -14,4 +14,4 @@ pub use completion_queue::CompletionQueue;
 pub use submission_queue::{SubmissionQueue, SubmissionSegment};
 pub use ring::IoUring;
 
-pub use hard_linked::HardLinked;
+pub use hard_linked::{HardLinked, HardLinkedSQE};
