@@ -8,38 +8,45 @@ use super::{Event, Cancellation};
 /// A `readv` event.
 pub struct ReadV<'a, T> {
     pub io: &'a T,
-    pub bufs: Vec<Vec<u8>>,
-    pub iovecs: Vec<IoSliceMut<'a>>, 
+    pub bufs: Vec<Box<[u8]>>,
     pub offset: usize
 }
 
 impl<'a, T: AsRawFd + Unpin> ReadV<'a, T> {
-    pub fn new(io: &'a T, bufs: Vec<Vec<u8>>, offset: usize) -> ReadV<T> {
-        let mut iovecs = Vec::with_capacity(bufs.len()); 
-        for buf in bufs.iter() { 
-            // Unsafe contract: transmute is defined behaviour because 
-            // IoSliceMut is guaranteed ABI compatible with libc::iovec 
-            // on Unix: https://doc.rust-lang.org/beta/std/io/struct.IoSliceMut.html
-            unsafe { 
-                iovecs.push(std::mem::transmute::<libc::iovec, IoSliceMut>(
-                    libc::iovec { 
-                        iov_base: buf.as_ptr() as *mut libc::c_void, 
-                        iov_len: buf.len() as libc::size_t, 
-                    }
-                )); 
-            }
-        }
-        ReadV { io, iovecs, bufs, offset }
+    pub fn new(io: &'a T, bufs: Vec<Box<[u8]>>, offset: usize) -> ReadV<T> {
+        ReadV { io, bufs, offset }
+    }
+
+    fn iovecs(&mut self) -> &'_ mut [IoSliceMut<'_>] {
+        // Unsafe contract:
+        // This pointer cast is defined behaviour because Box<[u8]> (wide pointer)
+        // is currently ABI compatible with libc::iovec.
+        //
+        // Then, libc::iovec is guaranteed ABI compatible with IoSliceMut on Unix:
+        // https://doc.rust-lang.org/beta/std/io/struct.IoSliceMut.html
+        //
+        // We are relying on the internals of Box<[u8]>, but this is such a
+        // foundational part of Rust it's unlikely the data layout would change
+        // without warning.
+        //
+        // Pointer cast expression adapted from the "Turning a &mut T into an &mut U"
+        // example of: https://doc.rust-lang.org/std/mem/fn.transmute.html#alternatives
+        unsafe { &mut *(&mut self.bufs[..] as *mut [Box<[u8]>] as *mut [IoSliceMut]) }
     }
 }
 
 
 impl<'a, T: AsRawFd + Unpin> Event for ReadV<'a, T> {
     unsafe fn prepare(&mut self, sqe: &mut iou::SubmissionQueueEvent<'_>) {
-        sqe.prep_read_vectored(self.io.as_raw_fd(), &mut self.iovecs[..], self.offset);
+        let offset = self.offset;
+        sqe.prep_read_vectored(self.io.as_raw_fd(), self.iovecs(), offset);
     }
 
     unsafe fn cancel(this: &mut ManuallyDrop<Self>) -> Cancellation {
-        todo!(); 
+        unsafe fn drop(data: *mut (), cap: usize) {
+            std::mem::drop(Vec::from_raw_parts(data as *mut Box<[u8]>, cap, cap))
+        }
+        let mut bufs: ManuallyDrop<Vec<Box<[u8]>>> = ManuallyDrop::new(ManuallyDrop::take(this).bufs);
+        Cancellation::new(bufs.as_mut_ptr() as *mut (), bufs.capacity(), drop)
     }
 }

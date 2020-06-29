@@ -9,9 +9,9 @@ const ASSERT: &[u8] = b"But this formidable power of death -";
 #[test]
 fn readv_file() {
     let file = File::open("props.txt").unwrap();
-    let vec1 = vec![0; 4];
-    let vec2 = vec![0; 5];
-    let vec3 = vec![0; 10];
+    let vec1 = Box::new([0; 4]);
+    let vec2 = Box::new([0; 5]);
+    let vec3 = Box::new([0; 10]);
     let readv: ReadV<'_, File> = ReadV::new(&file, vec![vec1, vec2, vec3], 0);
     let (readv, result) = futures::executor::block_on(Submission::new(readv, demo::driver()));
     dbg!(&result); 
