@@ -17,7 +17,7 @@ impl<'a, T: AsRawFd + Unpin> ReadV<'a, T> {
         ReadV { io, bufs, offset }
     }
 
-    fn iovecs(&mut self) -> &'_ mut [IoSliceMut<'_>] {
+    fn iovecs(&mut self) -> &mut [IoSliceMut] {
         // Unsafe contract:
         // This pointer cast is defined behaviour because Box<[u8]> (wide pointer)
         // is currently ABI compatible with libc::iovec.
