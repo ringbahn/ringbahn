@@ -11,7 +11,7 @@ use crate::completion;
 
 pub use crate::completion::complete;
 
-/// A ccompletion which will be used to wake the task waiting on this event.
+/// A completion which will be used to wake the task waiting on this event.
 ///
 /// This type is opaque to users of ringbahn. It is constructed by the callback passed to
 /// [Drive::poll_prepare].
@@ -35,11 +35,11 @@ pub trait Drive {
     /// Prepare an event on the submission queue.
     ///
     /// The implementer is responsible for provisioning an [`iou::SubmissionQueueEvent`] from the
-    /// submission  queue. Once an SQE is available, the implementer should pass it to the
+    /// submission queue. Once an SQE is available, the implementer should pass it to the
     /// `prepare` callback, which constructs a [`Completion`], and return that `Completion` to the
     /// caller.
     ///
-    /// If the driver is not ready to recieve more events, it can return `Poll::Pending`. If it
+    /// If the driver is not ready to receive more events, it can return `Poll::Pending`. If it
     /// does, it must register a waker to wake the task when more events can be prepared, otherwise
     /// this method will not be called again. This allows the driver to implement backpressure.
     ///

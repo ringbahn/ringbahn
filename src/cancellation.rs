@@ -14,7 +14,7 @@ pub struct Cancellation {
 
 impl Cancellation {
     /// Construct a new cancellation callback to hold resources until the event concludes. The
-    /// `drop` argument will be called recieve the `data` and `metadata` fields when the
+    /// `drop` argument will be called receive the `data` and `metadata` fields when the
     /// cancellation is dropped.
     ///
     /// ## Safety
