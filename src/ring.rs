@@ -16,7 +16,7 @@ use State::*;
 /// 
 /// Ring is a state machine similar to `Submission`, but it is designed to cycle through multiple
 /// IO events submitted to io-uring, rather than representing a single submission. Because of this,
-/// it is more low level, but it is suitable fro building an IO object like a `File` on top of
+/// it is more low level, but it is suitable for building an IO object like a `File` on top of
 /// io-uring.
 ///
 /// Users writing code on top of `Ring` are responsible for making sure that it is correct. For
