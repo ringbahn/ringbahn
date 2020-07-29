@@ -5,6 +5,7 @@ use std::future::Future;
 use std::io;
 use std::mem::ManuallyDrop;
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
+use std::os::raw::c_int;
 use std::path::Path;
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -43,25 +44,45 @@ impl File {
         File::open_on_driver(path, DemoDriver::default())
     }
 
+    /// Open a file using the default driver, allowing for extra flags to be passed
+    pub fn open_with_extra_flags(path: impl AsRef<Path>, extra_flags : c_int) -> Open {
+        File::open_on_driver_with_extra_flags(path, extra_flags, DemoDriver::default())
+    }
+
     /// Create a new file using the default driver
     pub fn create(path: impl AsRef<Path>) -> Create {
         File::create_on_driver(path, DemoDriver::default())
     }
+
+    /// Create a file using the default driver, allowing for extra flags to be passed
+    pub fn create_with_extra_flags(path: impl AsRef<Path>, extra_flags : c_int) -> Create {
+        File::create_on_driver_with_extra_flags(path, extra_flags, DemoDriver::default())
+    }
 }
 
 impl<D: Drive + Clone> File<D> {
-    /// Open a file
-    pub fn open_on_driver(path: impl AsRef<Path>, driver: D) -> Open<D> {
-        let flags = libc::O_CLOEXEC | libc::O_RDONLY;
+    /// Open a file, allowing for extra flags to be passed
+    pub fn open_on_driver_with_extra_flags(path: impl AsRef<Path>, flags : c_int, driver: D) -> Open<D> {
+        let flags = flags | libc::O_CLOEXEC | libc::O_RDONLY;
         let event = OpenAt::new(path, libc::AT_FDCWD, flags, 0o666);
         Open(Submission::new(event, driver))
     }
 
-    /// Create a file
-    pub fn create_on_driver(path: impl AsRef<Path>, driver: D) -> Create<D> {
-        let flags = libc::O_CLOEXEC | libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC;
+    /// Open a file
+    pub fn open_on_driver(path: impl AsRef<Path>, driver: D) -> Open<D> {
+        File::open_on_driver_with_extra_flags(path, 0, driver)
+    }
+
+    /// Create a file, allowing for extra flags to be passed
+    pub fn create_on_driver_with_extra_flags(path: impl AsRef<Path>, flags : c_int, driver: D) -> Create<D> {
+        let flags = flags | libc::O_CLOEXEC | libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC;
         let event = OpenAt::new(path, libc::AT_FDCWD, flags, 0o666);
         Create(Submission::new(event, driver))
+    }
+
+    /// Create a file
+    pub fn create_on_driver(path: impl AsRef<Path>, driver: D) -> Create<D> {
+        File::create_on_driver_with_extra_flags(path, 0, driver)
     }
 }
 
