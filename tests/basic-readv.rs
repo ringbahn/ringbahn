@@ -14,7 +14,6 @@ fn readv_file() {
     let vec3 = Box::new([0; 10]);
     let readv: ReadV<'_, File> = ReadV::new(&file, vec![vec1, vec2, vec3], 0);
     let (readv, result) = futures::executor::block_on(Submission::new(readv, demo::driver()));
-    dbg!(&result); 
     assert!(result.is_ok());
     assert_eq!(readv.bufs[0][..], ASSERT[0..4]); 
     assert_eq!(readv.bufs[1][..], ASSERT[4..9]); 
