@@ -6,6 +6,7 @@ mod read;
 mod readv;
 mod openat;
 mod write;
+mod writev;
 
 use std::mem::ManuallyDrop;
 
@@ -17,6 +18,7 @@ pub use read::Read;
 pub use readv::ReadV;
 pub use openat::OpenAt;
 pub use write::Write;
+pub use writev::WriteV;
 
 /// An IO event that can be scheduled on an io-uring driver.
 ///
