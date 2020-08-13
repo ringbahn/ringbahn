@@ -17,7 +17,7 @@ impl<'a, T: AsRawFd + Unpin> ReadV<'a, T> {
         ReadV { io, bufs, offset }
     }
 
-    fn iovecs(&mut self) -> &mut [IoSliceMut] {
+    fn as_iovecs(buffers: &mut [Box<[u8]>]) -> &mut [IoSliceMut] {
         // Unsafe contract:
         // This pointer cast is defined behaviour because Box<[u8]> (wide pointer)
         // is currently ABI compatible with libc::iovec.
@@ -31,15 +31,14 @@ impl<'a, T: AsRawFd + Unpin> ReadV<'a, T> {
         //
         // Pointer cast expression adapted from the "Turning a &mut T into an &mut U"
         // example of: https://doc.rust-lang.org/std/mem/fn.transmute.html#alternatives
-        unsafe { &mut *(&mut self.bufs[..] as *mut [Box<[u8]>] as *mut [IoSliceMut]) }
+        unsafe { &mut *(buffers as *mut [Box<[u8]>] as *mut [IoSliceMut]) }
     }
 }
 
 
 impl<'a, T: AsRawFd + Unpin> Event for ReadV<'a, T> {
     unsafe fn prepare(&mut self, sqe: &mut iou::SubmissionQueueEvent<'_>) {
-        let offset = self.offset;
-        sqe.prep_read_vectored(self.io.as_raw_fd(), self.iovecs(), offset);
+        sqe.prep_read_vectored(self.io.as_raw_fd(), Self::as_iovecs(&mut self.bufs[..]), self.offset);
     }
 
     unsafe fn cancel(this: &mut ManuallyDrop<Self>) -> Cancellation {
