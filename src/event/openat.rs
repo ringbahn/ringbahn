@@ -4,17 +4,17 @@ use std::os::unix::io::RawFd;
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 
-use super::{Event, SubmissionSegment, Cancellation};
+use super::{Event, SQE, SQEs, Cancellation};
 
 pub struct OpenAt {
     path: CString,
     dfd: RawFd,
-    flags: i32,
-    mode: u32,
+    flags: iou::OFlag,
+    mode: iou::Mode,
 }
 
 impl OpenAt {
-    pub fn new(path: impl AsRef<Path>, dfd: RawFd, flags: i32, mode: u32) -> OpenAt {
+    pub fn new(path: impl AsRef<Path>, dfd: RawFd, flags: iou::OFlag, mode: iou::Mode) -> OpenAt {
         let path = CString::new(path.as_ref().as_os_str().as_bytes()).expect("invalid path");
         OpenAt { path, dfd, flags, mode }
     }
@@ -23,8 +23,10 @@ impl OpenAt {
 impl Event for OpenAt {
     fn sqes_needed(&self) -> u32 { 1 }
 
-    unsafe fn prepare(&mut self, sqs: &mut SubmissionSegment<'_>) {
-        sqs.singular().prep_openat(self.dfd, self.path.as_ptr(), self.flags, self.mode)
+    unsafe fn prepare<'sq>(&mut self, sqs: &mut SQEs<'sq>) -> SQE<'sq> {
+        let mut sqe = sqs.single().unwrap();
+        sqe.prep_openat(self.dfd, self.path.as_ptr(), self.flags, self.mode);
+        sqe
     }
 
     unsafe fn cancel(this: &mut ManuallyDrop<Self>) -> Cancellation {

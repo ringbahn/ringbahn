@@ -28,6 +28,15 @@ impl<E: Event, D: Drive> Submission<E, D> {
         self.ring.driver()
     }
 
+    pub fn replace_event(self: Pin<&mut Self>, event: E) {
+        let (ring, event_slot) = self.split();
+        if let Some(event) = &mut *event_slot {
+            let cancellation = unsafe { Event::cancel(event) };
+            ring.cancel_pinned(cancellation);
+        }
+        *event_slot = Some(ManuallyDrop::new(event));
+    }
+
     fn split(self: Pin<&mut Self>) -> (Pin<&mut Ring<D>>, &mut Option<ManuallyDrop<E>>) {
         unsafe {
             let this = Pin::get_unchecked_mut(self);

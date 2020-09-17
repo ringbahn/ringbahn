@@ -7,6 +7,7 @@ use std::task::{Context, Poll};
 
 use futures_core::ready;
 use futures_io::{AsyncRead, AsyncBufRead, AsyncWrite};
+use nix::sys::socket::SockProtocol;
 
 use crate::buf::Buffer;
 use crate::drive::demo::DemoDriver;
@@ -39,10 +40,11 @@ impl TcpStream {
 
 impl<D: Drive + Clone> TcpStream<D> {
     pub fn connect_on_driver<A: ToSocketAddrs>(addr: A, driver: D) -> Connect<D> {
-        let (fd, addr) = match socket(addr) {
+        let (fd, addr) = match socket(addr, SockProtocol::Tcp) {
             Ok(fd)  => fd,
             Err(e)  => return Connect(Err(Some(e))),
         };
+        let addr = iou::SockAddr::Inet(nix::sys::socket::InetAddr::from_std(&addr));
         Connect(Ok(Submission::new(event::Connect::new(fd, addr), driver)))
     }
 }
@@ -131,7 +133,11 @@ impl<D: Drive> AsyncBufRead for TcpStream<D> {
         let fd = self.fd;
         let (ring, buf) = self.split();
         buf.fill_buf(|buf| {
-            let n = ready!(ring.poll(ctx, true, 1, |sqs| unsafe { sqs.singular().prep_read(fd, buf, 0) }))?;
+            let n = ready!(ring.poll(ctx, true, 1, |sqs| unsafe { 
+                let mut sqe = sqs.single().unwrap();
+                sqe.prep_read(fd, buf, 0);
+                sqe
+            }))?;
             Poll::Ready(Ok(n as u32))
         })
     }
@@ -149,7 +155,11 @@ impl<D: Drive> AsyncWrite for TcpStream<D> {
         let data = ready!(buf.fill_buf(|mut buf| {
             Poll::Ready(Ok(io::Write::write(&mut buf, slice)? as u32))
         }))?;
-        let n = ready!(ring.poll(ctx, true, 1, |sqs| unsafe { sqs.singular().prep_write(fd, data, 0) }))?;
+        let n = ready!(ring.poll(ctx, true, 1, |sqs| unsafe {
+            let mut sqe = sqs.single().unwrap();
+            sqe.prep_write(fd, data, 0);
+            sqe
+        }))?;
         buf.clear();
         Poll::Ready(Ok(n as usize))
     }
@@ -162,7 +172,11 @@ impl<D: Drive> AsyncWrite for TcpStream<D> {
     fn poll_close(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<io::Result<()>> {
         self.as_mut().guard_op(Op::Close);
         let fd = self.fd;
-        ready!(self.ring().poll(ctx, true, 1, |sqs| sqs.singular().prep_close(fd)))?;
+        ready!(self.ring().poll(ctx, true, 1, |sqs| unsafe {
+            let mut sqe = sqs.single().unwrap();
+            sqe.prep_close(fd);
+            sqe
+        }))?;
         Poll::Ready(Ok(()))
     }
 }

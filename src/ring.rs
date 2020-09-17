@@ -4,11 +4,11 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use futures_core::ready;
+use iou::{SQE, SQEs};
 
 use crate::completion::Completion;
 use crate::drive::Drive;
 use crate::Cancellation;
-use crate::kernel::SubmissionSegment;
 
 use State::*;
 
@@ -76,7 +76,7 @@ impl<D: Drive> Ring<D> {
         ctx: &mut Context<'_>,
         is_eager: bool,
         count: u32,
-        prepare: impl FnOnce(&mut SubmissionSegment<'_>),
+        prepare: impl for<'sq> FnOnce(&mut SQEs<'sq>) -> SQE<'sq>,
     ) -> Poll<io::Result<u32>> {
         match self.state {
             Inert | Cancelled(_) => {
@@ -103,23 +103,23 @@ impl<D: Drive> Ring<D> {
         self: Pin<&mut Self>,
         ctx: &mut Context<'_>,
         count: u32,
-        prepare: impl FnOnce(&mut SubmissionSegment),
+        prepare: impl for<'sq> FnOnce(&mut SQEs<'sq>) -> SQE<'sq>,
     ) -> Poll<()> {
         let (driver, state) = self.split();
         let completion = match *state {
             Cancelled(prev) => {
                 ready!(driver.poll_prepare(ctx, count + 1, |mut sqs, ctx| {
                     *state = Lost;
-                    sqs.hard_linked().next().unwrap().prep_cancel(prev, 0);
-                    prepare(&mut sqs);
-                    sqs.finish(ctx)
+                    unsafe { sqs.hard_linked().next().unwrap().prep_cancel(prev, 0); }
+                    let sqe = prepare(&mut sqs);
+                    crate::finish(sqe, sqs, ctx)
                 }))
             }
             Inert           => {
                 ready!(driver.poll_prepare(ctx, count, |mut sqs, ctx| {
                     *state = Lost;
-                    prepare(&mut sqs);
-                    sqs.finish(ctx)
+                    let sqe = prepare(&mut sqs);
+                    crate::finish(sqe, sqs, ctx)
                 }))
             }
             _               => unreachable!(),

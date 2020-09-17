@@ -8,9 +8,9 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use crate::completion;
-use crate::completion::complete;
-use crate::kernel::SubmissionSegment;
+use iou::{SQE, SQEs};
 
+pub use completion::complete;
 
 /// A completion which will be used to wake the task waiting on this event.
 ///
@@ -22,7 +22,12 @@ pub struct Completion<'cx> {
 }
 
 impl<'cx> Completion<'cx> {
-    pub(crate) fn new(real: completion::Completion, _: &mut Context<'cx>) -> Completion<'cx> {
+    pub fn new(mut sqe: SQE<'_>, _sqes: SQEs<'_>, cx: &mut Context<'cx>) -> Completion<'cx> {
+        let real = completion::Completion::new(cx.waker().clone());
+        unsafe {
+            sqe.set_user_data(real.addr());
+        }
+
         Completion { real, marker: PhantomData }
     }
 }
@@ -56,7 +61,7 @@ pub trait Drive {
         self: Pin<&mut Self>,
         ctx: &mut Context<'cx>,
         count: u32,
-        prepare: impl FnOnce(SubmissionSegment<'_>, &mut Context<'cx>) -> Completion<'cx>,
+        prepare: impl FnOnce(SQEs<'_>, &mut Context<'cx>) -> Completion<'cx>,
     ) -> Poll<Completion<'cx>>;
 
     /// Submit all of the events on the submission queue.

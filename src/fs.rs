@@ -52,15 +52,15 @@ impl File {
 impl<D: Drive + Clone> File<D> {
     /// Open a file
     pub fn open_on_driver(path: impl AsRef<Path>, driver: D) -> Open<D> {
-        let flags = libc::O_CLOEXEC | libc::O_RDONLY;
-        let event = OpenAt::new(path, libc::AT_FDCWD, flags, 0o666);
+        let flags = iou::OFlag::O_CLOEXEC | iou::OFlag::O_RDONLY;
+        let event = OpenAt::new(path, libc::AT_FDCWD, flags, iou::Mode::from_bits(0o666).unwrap());
         Open(Submission::new(event, driver))
     }
 
     /// Create a file
     pub fn create_on_driver(path: impl AsRef<Path>, driver: D) -> Create<D> {
-        let flags = libc::O_CLOEXEC | libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC;
-        let event = OpenAt::new(path, libc::AT_FDCWD, flags, 0o666);
+        let flags = iou::OFlag::O_CLOEXEC | iou::OFlag::O_WRONLY | iou::OFlag::O_CREAT | iou::OFlag::O_TRUNC;
+        let event = OpenAt::new(path, libc::AT_FDCWD, flags, iou::Mode::from_bits(0o666).unwrap());
         Create(Submission::new(event, driver))
     }
 }
@@ -116,7 +116,11 @@ impl<D: Drive> File<D> {
         let flags = libc::AT_EMPTY_PATH;
         let mask = libc::STATX_SIZE;
         unsafe {
-            ready!(ring.poll(ctx, true, 1, |sqs| sqs.singular().prep_statx(fd, &EMPTY, flags, mask, statx)))?;
+            ready!(ring.poll(ctx, true, 1, |sqs| {
+                let mut sqe = sqs.single().unwrap();
+                sqe.prep_statx(fd, &EMPTY, flags, mask, statx);
+                sqe
+            }))?;
             Poll::Ready(Ok((*statx).stx_size))
         }
     }
@@ -162,7 +166,11 @@ impl<D: Drive> AsyncBufRead for File<D> {
         let fd = self.fd;
         let (ring, buf, pos) = self.split();
         buf.fill_buf(|buf| {
-            let n = ready!(ring.poll(ctx, true, 1, |sqs| unsafe { sqs.singular().prep_read(fd, buf, *pos) }))?;
+            let n = ready!(ring.poll(ctx, true, 1, |sqs| unsafe {
+                let mut sqe = sqs.single().unwrap();
+                sqe.prep_read(fd, buf, *pos);
+                sqe
+            }))?;
             *pos += n as u64;
             Poll::Ready(Ok(n as u32))
         })
@@ -181,7 +189,11 @@ impl<D: Drive> AsyncWrite for File<D> {
         let data = ready!(buf.fill_buf(|mut buf| {
             Poll::Ready(Ok(io::Write::write(&mut buf, slice)? as u32))
         }))?;
-        let n = ready!(ring.poll(ctx, true, 1, |sqs| unsafe { sqs.singular().prep_write(fd, data, *pos) }))?;
+        let n = ready!(ring.poll(ctx, true, 1, |sqs| unsafe {
+            let mut sqe = sqs.single().unwrap();
+            sqe.prep_write(fd, data, *pos);
+            sqe
+        }))?;
         *pos += n as u64;
         buf.clear();
         Poll::Ready(Ok(n as usize))
@@ -195,7 +207,11 @@ impl<D: Drive> AsyncWrite for File<D> {
     fn poll_close(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<io::Result<()>> {
         self.as_mut().guard_op(Op::Close);
         let fd = self.fd;
-        ready!(self.ring().poll(ctx, true, 1, |sqs| sqs.singular().prep_close(fd)))?;
+        ready!(self.ring().poll(ctx, true, 1, |sqs| unsafe {
+            let mut sqe = sqs.single().unwrap();
+            sqe.prep_close(fd);
+            sqe
+        }))?;
         Poll::Ready(Ok(()))
     }
 }

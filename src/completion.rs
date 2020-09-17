@@ -6,7 +6,7 @@ use std::task::Waker;
 use parking_lot::Mutex;
 
 use crate::Cancellation;
-use crate::kernel::CQE;
+use iou::CQE;
 
 use State::*;
 
@@ -87,7 +87,7 @@ impl Completion {
     }
 }
 
-pub(crate) fn complete(cqe: CQE) {
+pub fn complete(cqe: CQE) {
     let result = cqe.result();
     let completion = cqe.user_data() as *mut Mutex<State>;
 
