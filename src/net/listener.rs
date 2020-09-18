@@ -19,7 +19,7 @@ pub struct TcpListener<D: Drive = DemoDriver<'static>> {
     ring: Ring<D>,
     fd: RawFd,
     active: Op,
-    addr: Option<Box<iou::SockAddrStorage>>,
+    addr: Option<Box<iou::sqe::SockAddrStorage>>,
 }
 
 #[derive(Eq, PartialEq, Copy, Clone, Debug)]
@@ -45,7 +45,7 @@ impl<D: Drive> TcpListener<D> {
                 return Err(io::Error::last_os_error());
             }
 
-            let addr = iou::SockAddr::Inet(nix::sys::socket::InetAddr::from_std(&addr));
+            let addr = iou::sqe::SockAddr::Inet(nix::sys::socket::InetAddr::from_std(&addr));
             let (addr, addrlen) = addr.as_ffi_pair();
             if libc::bind(fd, addr, addrlen) < 0 {
                 return Err(io::Error::last_os_error());
@@ -83,11 +83,11 @@ impl<D: Drive> TcpListener<D> {
         let cancellation = match self.active {
             Op::Accept => {
                 unsafe fn callback(addr: *mut (), _: usize) {
-                    drop(Box::from_raw(addr as *mut iou::SockAddrStorage))
+                    drop(Box::from_raw(addr as *mut iou::sqe::SockAddrStorage))
                 }
                 unsafe {
-                    let addr: &mut iou::SockAddrStorage = &mut **self.addr.as_mut().unwrap();
-                    Cancellation::new(addr as *mut iou::SockAddrStorage as *mut (), 0, callback)
+                    let addr: &mut iou::sqe::SockAddrStorage = &mut **self.addr.as_mut().unwrap();
+                    Cancellation::new(addr as *mut iou::sqe::SockAddrStorage as *mut (), 0, callback)
                 }
             }
             Op::Close   => Cancellation::null(),
@@ -105,11 +105,11 @@ impl<D: Drive> TcpListener<D> {
         unsafe { Pin::map_unchecked_mut(self, |this| &mut this.ring) }
     }
 
-    fn split(self: Pin<&mut Self>) -> (Pin<&mut Ring<D>>, &mut iou::SockAddrStorage) {
+    fn split(self: Pin<&mut Self>) -> (Pin<&mut Ring<D>>, &mut iou::sqe::SockAddrStorage) {
         unsafe {
             let this = Pin::get_unchecked_mut(self);
             if this.addr.is_none() {
-                this.addr = Some(Box::new(iou::SockAddrStorage::uninit()));
+                this.addr = Some(Box::new(iou::sqe::SockAddrStorage::uninit()));
             }
             (Pin::new_unchecked(&mut this.ring), &mut **this.addr.as_mut().unwrap())
         }
@@ -148,7 +148,7 @@ impl<D: Drive + Clone> TcpListener<D> {
             let result = addr.as_socket_addr();
             self.as_mut().drop_addr();
             match result? {
-                iou::SockAddr::Inet(addr) => addr.to_std(),
+                iou::sqe::SockAddr::Inet(addr) => addr.to_std(),
                 addr => panic!("TcpListener addr cannot be {:?}", addr.family()),
             }
         };

@@ -7,6 +7,7 @@ use std::task::{Context, Poll};
 
 use futures_core::ready;
 use futures_io::{AsyncRead, AsyncBufRead, AsyncWrite};
+use iou::sqe::SockAddr;
 use nix::sys::socket::SockProtocol;
 
 use crate::buf::Buffer;
@@ -44,8 +45,8 @@ impl<D: Drive + Clone> TcpStream<D> {
             Ok(fd)  => fd,
             Err(e)  => return Connect(Err(Some(e))),
         };
-        let addr = iou::SockAddr::Inet(nix::sys::socket::InetAddr::from_std(&addr));
-        Connect(Ok(Submission::new(event::Connect::new(fd, addr), driver)))
+        let addr = Box::new(SockAddr::Inet(nix::sys::socket::InetAddr::from_std(&addr)));
+        Connect(Ok(Submission::new(event::Connect { fd, addr }, driver)))
     }
 }
 

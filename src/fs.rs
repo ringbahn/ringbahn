@@ -11,6 +11,7 @@ use std::task::{Context, Poll};
 
 use futures_core::ready;
 use futures_io::{AsyncRead, AsyncBufRead, AsyncWrite, AsyncSeek};
+use iou::sqe::{OFlag, Mode};
 
 use crate::buf::Buffer;
 use crate::drive::Drive;
@@ -52,15 +53,15 @@ impl File {
 impl<D: Drive + Clone> File<D> {
     /// Open a file
     pub fn open_on_driver(path: impl AsRef<Path>, driver: D) -> Open<D> {
-        let flags = iou::OFlag::O_CLOEXEC | iou::OFlag::O_RDONLY;
-        let event = OpenAt::new(path, libc::AT_FDCWD, flags, iou::Mode::from_bits(0o666).unwrap());
+        let flags = OFlag::O_CLOEXEC | OFlag::O_RDONLY;
+        let event = OpenAt::without_dir(path, flags, Mode::from_bits(0o666).unwrap());
         Open(Submission::new(event, driver))
     }
 
     /// Create a file
     pub fn create_on_driver(path: impl AsRef<Path>, driver: D) -> Create<D> {
-        let flags = iou::OFlag::O_CLOEXEC | iou::OFlag::O_WRONLY | iou::OFlag::O_CREAT | iou::OFlag::O_TRUNC;
-        let event = OpenAt::new(path, libc::AT_FDCWD, flags, iou::Mode::from_bits(0o666).unwrap());
+        let flags = OFlag::O_CLOEXEC | OFlag::O_WRONLY | OFlag::O_CREAT | OFlag::O_TRUNC;
+        let event = OpenAt::without_dir(path, flags, Mode::from_bits(0o666).unwrap());
         Create(Submission::new(event, driver))
     }
 }
@@ -108,17 +109,18 @@ impl<D: Drive> File<D> {
 
     fn poll_file_size(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<io::Result<u64>> {
         static EMPTY: libc::c_char = 0;
+        use std::ffi::CStr;
 
         self.as_mut().guard_op(Op::Statx);
         let fd = self.fd;
         let (ring, buf, _) = self.split();
         let statx = buf.as_statx();
-        let flags = libc::AT_EMPTY_PATH;
-        let mask = libc::STATX_SIZE;
+        let flags = iou::sqe::StatxFlags::AT_EMPTY_PATH;
+        let mask = iou::sqe::StatxMode::STATX_SIZE;
         unsafe {
             ready!(ring.poll(ctx, true, 1, |sqs| {
                 let mut sqe = sqs.single().unwrap();
-                sqe.prep_statx(fd, &EMPTY, flags, mask, statx);
+                sqe.prep_statx(fd, CStr::from_ptr(&EMPTY), flags, mask, &mut *statx);
                 sqe
             }))?;
             Poll::Ready(Ok((*statx).stx_size))

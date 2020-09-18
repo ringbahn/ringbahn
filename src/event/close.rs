@@ -4,13 +4,7 @@ use std::os::unix::io::RawFd;
 use super::{Event, SQE, SQEs, Cancellation};
 
 pub struct Close {
-    fd: RawFd,
-}
-
-impl Close {
-    pub fn new(fd: RawFd) -> Close {
-        Close { fd }
-    }
+    pub fd: RawFd,
 }
 
 impl Event for Close {

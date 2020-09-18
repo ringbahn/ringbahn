@@ -1,17 +1,13 @@
 use std::os::unix::io::RawFd;
 use std::mem::ManuallyDrop;
 
+use iou::sqe::SockAddr;
+
 use super::{Event, SQE, SQEs, Cancellation};
 
 pub struct Connect {
     pub fd: RawFd,
-    addr: Box<iou::SockAddr>,
-}
-
-impl Connect {
-    pub fn new(fd: RawFd, addr: iou::SockAddr) -> Connect {
-        Connect { fd, addr: Box::new(addr) }
-    }
+    pub addr: Box<SockAddr>,
 }
 
 impl Event for Connect {
@@ -25,8 +21,8 @@ impl Event for Connect {
 
     unsafe fn cancel(this: &mut ManuallyDrop<Self>) -> Cancellation {
         unsafe fn callback(addr: *mut (), _: usize) {
-            drop(Box::from_raw(addr as *mut iou::SockAddr));
+            drop(Box::from_raw(addr as *mut SockAddr));
         }
-        Cancellation::new(&mut *this.addr as *mut iou::SockAddr as *mut (), 0, callback)
+        Cancellation::new(&mut *this.addr as *mut SockAddr as *mut (), 0, callback)
     }
 }
