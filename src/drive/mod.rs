@@ -40,16 +40,10 @@ impl<'cx> Completion<'cx> {
 pub trait Drive {
     /// Prepare an event on the submission queue.
     ///
-<<<<<<< HEAD
-    /// The implementer is responsible for provisioning an [`iou::SubmissionQueueEvent`] from the
+    /// The implementer is responsible for provisioning an [`iou::SQE`] from the
     /// submission queue. Once an SQE is available, the implementer should pass it to the
     /// `prepare` callback, which constructs a [`Completion`], and return that `Completion` to the
     /// caller.
-=======
-    /// The implementer is responsible for provisioning an [`SQE`] from the submission  queue.
-    /// Once an SQE is available, the implementer should pass it to the `prepare` callback, which
-    /// constructs a [`Completion`], and return that `Completion` to the caller.
->>>>>>> 21943ce... New low-level API not based on iou.
     ///
     /// If the driver is not ready to receive more events, it can return `Poll::Pending`. If it
     /// does, it must register a waker to wake the task when more events can be prepared, otherwise

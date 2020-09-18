@@ -1,12 +1,11 @@
 //! Events that can be scheduled on io-uring with a [`Submission`]
 
 mod accept;
-mod connect;
 mod close;
-mod read;
-mod readv;
+mod connect;
 mod openat;
 mod read;
+mod readv;
 mod statx;
 mod timeout;
 mod write;
@@ -18,12 +17,11 @@ use crate::cancellation::Cancellation;
 use iou::{SQE, SQEs};
 
 pub use accept::Accept;
-pub use connect::Connect;
 pub use close::Close;
-pub use read::Read;
-pub use readv::ReadV;
+pub use connect::Connect;
 pub use openat::OpenAt;
 pub use read::Read;
+pub use readv::ReadV;
 pub use statx::Statx;
 pub use timeout::{Timeout, StaticTimeout};
 pub use write::Write;

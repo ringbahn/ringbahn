@@ -5,7 +5,7 @@ use super::{Event, SQE, SQEs, Cancellation};
 
 /// A basic read event.
 pub struct Write {
-    pub io: RawFd,
+    pub fd: RawFd,
     pub buf: Box<[u8]>,
     pub offset: u64
 }
@@ -15,7 +15,7 @@ impl Event for Write {
 
     unsafe fn prepare<'sq>(&mut self, sqs: &mut SQEs<'sq>) -> SQE<'sq> {
         let mut sqe = sqs.single().unwrap();
-        sqe.prep_write(self.io, &self.buf[..], self.offset);
+        sqe.prep_write(self.fd, &self.buf[..], self.offset);
         sqe
     }
 
