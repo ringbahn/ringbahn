@@ -7,7 +7,7 @@ use super::{Event, SQE, SQEs, Cancellation};
 pub struct Write {
     pub fd: RawFd,
     pub buf: Box<[u8]>,
-    pub offset: u64
+    pub offset: u64,
 }
 
 impl Event for Write {
