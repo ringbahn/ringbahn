@@ -21,11 +21,11 @@ pub use close::Close;
 pub use connect::Connect;
 pub use openat::OpenAt;
 pub use read::Read;
-pub use readv::ReadV;
+pub use readv::ReadVectored;
 pub use statx::Statx;
 pub use timeout::{Timeout, StaticTimeout};
 pub use write::Write;
-pub use writev::WriteV;
+pub use writev::WriteVectored;
 
 /// An IO event that can be scheduled on an io-uring driver.
 ///

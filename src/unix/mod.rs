@@ -4,7 +4,7 @@ use std::os::unix::io::RawFd;
 mod listener;
 mod stream;
 
-pub use listener::{UnixListener, Close};
+pub use listener::{UnixListener, Close, Accept, Incoming};
 pub use stream::{UnixStream, Connect};
 
 use nix::sys::socket as nix;

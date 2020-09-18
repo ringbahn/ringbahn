@@ -5,19 +5,19 @@ use std::mem::ManuallyDrop;
 use super::{Event, SQE, SQEs, Cancellation};
 
 /// A `writev` event.
-pub struct WriteV {
+pub struct WriteVectored {
     pub fd: RawFd,
     pub bufs: Vec<Box<[u8]>>,
     pub offset: u64,
 }
 
-impl WriteV {
+impl WriteVectored {
     fn iovecs(&self) -> &[IoSlice] {
         unsafe { & *(&self.bufs[..] as *const [Box<[u8]>] as *const [IoSlice]) }
     }
 }
 
-impl Event for WriteV {
+impl Event for WriteVectored {
     fn sqes_needed(&self) -> u32 { 1 }
 
     unsafe fn prepare<'sq>(&mut self, sqs: &mut SQEs<'sq>) -> SQE<'sq> {

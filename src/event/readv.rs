@@ -5,13 +5,13 @@ use std::mem::ManuallyDrop;
 use super::{Event, SQE, SQEs, Cancellation};
 
 /// A `readv` event.
-pub struct ReadV {
+pub struct ReadVectored {
     pub fd: RawFd,
     pub bufs: Vec<Box<[u8]>>,
     pub offset: u64,
 }
 
-impl ReadV {
+impl ReadVectored {
     fn as_iovecs(buffers: &mut [Box<[u8]>]) -> &mut [IoSliceMut] {
         // Unsafe contract:
         // This pointer cast is defined behaviour because Box<[u8]> (wide pointer)
@@ -31,7 +31,7 @@ impl ReadV {
 }
 
 
-impl Event for ReadV {
+impl Event for ReadVectored {
     fn sqes_needed(&self) -> u32 { 1 }
 
     unsafe fn prepare<'sq>(&mut self, sqs: &mut SQEs<'sq>) -> SQE<'sq> {
