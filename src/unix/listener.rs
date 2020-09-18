@@ -1,24 +1,23 @@
 use std::io;
 use std::future::Future;
-use std::net::{ToSocketAddrs, SocketAddr};
 use std::os::unix::io::{RawFd};
+use std::path::Path;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use futures_core::{ready, Stream};
-use nix::sys::socket::{self as nix_socket, SockProtocol, SockFlag};
+use nix::sys::socket::{self as nix_socket, SockFlag};
 
 use crate::drive::demo::DemoDriver;
 use crate::Cancellation;
 use crate::{Drive, Ring};
 
-use super::TcpStream;
+use super::UnixStream;
 
-pub struct TcpListener<D: Drive = DemoDriver<'static>> {
+pub struct UnixListener<D: Drive = DemoDriver<'static>> {
     ring: Ring<D>,
     fd: RawFd,
     active: Op,
-    addr: Option<Box<iou::sqe::SockAddrStorage>>,
 }
 
 #[derive(Eq, PartialEq, Copy, Clone, Debug)]
@@ -28,24 +27,21 @@ enum Op {
     Close,
 }
 
-impl TcpListener {
-    pub fn bind<A: ToSocketAddrs>(addr: A) -> io::Result<TcpListener> {
-        TcpListener::bind_on_driver(addr, DemoDriver::default())
+impl UnixListener {
+    pub fn bind(path: impl AsRef<Path>) -> io::Result<UnixListener> {
+        UnixListener::bind_on_driver(path, DemoDriver::default())
     }
 }
 
-impl<D: Drive> TcpListener<D> {
-    pub fn bind_on_driver<A: ToSocketAddrs>(addr: A, driver: D) -> io::Result<TcpListener<D>> {
-        let (fd, addr) = super::socket(addr, SockProtocol::Tcp)?;
-        let addr = iou::sqe::SockAddr::Inet(nix_socket::InetAddr::from_std(&addr));
-        nix_socket::setsockopt(fd, nix_socket::sockopt::ReuseAddr, &true)
-            .map_err(|e| e.as_errno().unwrap_or(nix::errno::Errno::EIO))?;
+impl<D: Drive> UnixListener<D> {
+    pub fn bind_on_driver(path: impl AsRef<Path>, driver: D) -> io::Result<UnixListener<D>> {
+        let fd = super::socket()?;
+        let addr = iou::sqe::SockAddr::Unix(nix_socket::UnixAddr::new(path.as_ref()).unwrap());
         nix_socket::bind(fd, &addr).map_err(|e| e.as_errno().unwrap_or(nix::errno::Errno::EIO))?;
         nix_socket::listen(fd, 128).map_err(|e| e.as_errno().unwrap_or(nix::errno::Errno::EIO))?;
         let ring = Ring::new(driver);
-        Ok(TcpListener {
+        Ok(UnixListener {
             active: Op::Nothing,
-            addr: None,
             fd, ring,
         })
     }
@@ -67,43 +63,18 @@ impl<D: Drive> TcpListener<D> {
     }
 
     fn cancel(&mut self) {
-        let cancellation = match self.active {
-            Op::Accept => {
-                unsafe fn callback(addr: *mut (), _: usize) {
-                    drop(Box::from_raw(addr as *mut iou::sqe::SockAddrStorage))
-                }
-                unsafe {
-                    let addr: &mut iou::sqe::SockAddrStorage = &mut **self.addr.as_mut().unwrap();
-                    Cancellation::new(addr as *mut iou::sqe::SockAddrStorage as *mut (), 0, callback)
-                }
-            }
-            Op::Close   => Cancellation::null(),
-            Op::Nothing => return,
-        };
-        self.active = Op::Nothing;
-        self.ring.cancel(cancellation);
-    }
-
-    unsafe fn drop_addr(self: Pin<&mut Self>) {
-        Pin::get_unchecked_mut(self).addr.take();
+        if self.active != Op::Nothing {
+            self.active = Op::Nothing;
+            self.ring.cancel(Cancellation::null());
+        }
     }
 
     fn ring(self: Pin<&mut Self>) -> Pin<&mut Ring<D>> {
         unsafe { Pin::map_unchecked_mut(self, |this| &mut this.ring) }
     }
-
-    fn split(self: Pin<&mut Self>) -> (Pin<&mut Ring<D>>, &mut iou::sqe::SockAddrStorage) {
-        unsafe {
-            let this = Pin::get_unchecked_mut(self);
-            if this.addr.is_none() {
-                this.addr = Some(Box::new(iou::sqe::SockAddrStorage::uninit()));
-            }
-            (Pin::new_unchecked(&mut this.ring), &mut **this.addr.as_mut().unwrap())
-        }
-    }
 }
 
-impl<D: Drive + Clone> TcpListener<D> {
+impl<D: Drive + Clone> UnixListener<D> {
     pub fn accept(&mut self) -> Accept<'_, D> where D: Unpin {
         Pin::new(self).accept_pinned()
     }
@@ -121,31 +92,21 @@ impl<D: Drive + Clone> TcpListener<D> {
     }
 
     pub fn poll_accept(mut self: Pin<&mut Self>, ctx: &mut Context<'_>)
-        -> Poll<io::Result<(TcpStream<D>, SocketAddr)>>
+        -> Poll<io::Result<UnixStream<D>>>
     {
         self.as_mut().guard_op(Op::Accept);
         let fd = self.fd;
-        let (ring, addr) = self.as_mut().split();
-        let fd = ready!(ring.poll(ctx, true, 1, |sqs| unsafe {
+        let fd = ready!(self.as_mut().ring().poll(ctx, true, 1, |sqs| unsafe {
             let mut sqe = sqs.single().unwrap();
-            sqe.prep_accept(fd, Some(addr), SockFlag::empty());
+            sqe.prep_accept(fd, None, SockFlag::empty());
             sqe
         }))? as RawFd;
-        let addr = unsafe {
-            let result = addr.as_socket_addr();
-            self.as_mut().drop_addr();
-            match result? {
-                iou::sqe::SockAddr::Inet(addr) => addr.to_std(),
-                addr => panic!("TcpListener addr cannot be {:?}", addr.family()),
-            }
-        };
-
-        Poll::Ready(Ok((TcpStream::from_fd(fd, self.ring().clone()), addr)))
+        Poll::Ready(Ok(UnixStream::from_fd(fd, self.ring().clone())))
     }
 
 }
 
-impl<D: Drive> Drop for TcpListener<D> {
+impl<D: Drive> Drop for UnixListener<D> {
     fn drop(&mut self) {
         match self.active {
             Op::Nothing => unsafe { libc::close(self.fd); }
@@ -155,11 +116,11 @@ impl<D: Drive> Drop for TcpListener<D> {
 }
 
 pub struct Accept<'a, D: Drive> {
-    socket: Pin<&'a mut TcpListener<D>>,
+    socket: Pin<&'a mut UnixListener<D>>,
 }
 
 impl<'a, D: Drive + Clone> Future for Accept<'a, D> {
-    type Output = io::Result<(TcpStream<D>, SocketAddr)>;
+    type Output = io::Result<UnixStream<D>>;
 
     fn poll(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<Self::Output> {
         self.socket.as_mut().poll_accept(ctx)
@@ -177,7 +138,7 @@ impl<'a, D: Drive> Incoming<'a, D> {
 }
 
 impl<'a, D: Drive + Clone> Stream for Incoming<'a, D> {
-    type Item = io::Result<(TcpStream<D>, SocketAddr)>;
+    type Item = io::Result<UnixStream<D>>;
 
     fn poll_next(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let next = ready!(self.inner().poll(ctx));
@@ -187,7 +148,7 @@ impl<'a, D: Drive + Clone> Stream for Incoming<'a, D> {
 
 
 pub struct Close<'a, D: Drive> {
-    socket: Pin<&'a mut TcpListener<D>>,
+    socket: Pin<&'a mut UnixListener<D>>,
 }
 
 impl<'a, D: Drive> Future for Close<'a, D> {
