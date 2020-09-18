@@ -120,6 +120,22 @@ impl<D: Drive + Clone> TcpListener<D> {
         Incoming { accept: self.accept_pinned() }
     }
 
+    pub fn accept_no_addr(&mut self) -> AcceptNoAddr<'_, D> where D: Unpin {
+        Pin::new(self).accept_no_addr_pinned()
+    }
+
+    pub fn accept_no_addr_pinned(self: Pin<&mut Self>) -> AcceptNoAddr<'_, D> {
+        AcceptNoAddr { socket: self }
+    }
+
+    pub fn incoming_no_addr(&mut self) -> IncomingNoAddr<'_, D> where D: Unpin {
+        Pin::new(self).incoming_no_addr_pinned()
+    }
+
+    pub fn incoming_no_addr_pinned(self: Pin<&mut Self>) -> IncomingNoAddr<'_, D> {
+        IncomingNoAddr { accept: self.accept_no_addr_pinned() }
+    }
+
     pub fn poll_accept(mut self: Pin<&mut Self>, ctx: &mut Context<'_>)
         -> Poll<io::Result<(TcpStream<D>, SocketAddr)>>
     {
@@ -143,6 +159,18 @@ impl<D: Drive + Clone> TcpListener<D> {
         Poll::Ready(Ok((TcpStream::from_fd(fd, self.ring().clone()), addr)))
     }
 
+    pub fn poll_accept_no_addr(mut self: Pin<&mut Self>, ctx: &mut Context<'_>)
+        -> Poll<io::Result<TcpStream<D>>>
+    {
+        self.as_mut().guard_op(Op::Accept);
+        let fd = self.fd;
+        let fd = ready!(self.as_mut().ring().poll(ctx, true, 1, |sqs| unsafe {
+            let mut sqe = sqs.single().unwrap();
+            sqe.prep_accept(fd, None, SockFlag::empty());
+            sqe
+        }))? as RawFd;
+        Poll::Ready(Ok(TcpStream::from_fd(fd, self.ring().clone())))
+    }
 }
 
 impl<D: Drive> Drop for TcpListener<D> {
@@ -166,6 +194,18 @@ impl<'a, D: Drive + Clone> Future for Accept<'a, D> {
     }
 }
 
+pub struct AcceptNoAddr<'a, D: Drive> {
+    socket: Pin<&'a mut TcpListener<D>>,
+}
+
+impl<'a, D: Drive + Clone> Future for AcceptNoAddr<'a, D> {
+    type Output = io::Result<TcpStream<D>>;
+
+    fn poll(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<Self::Output> {
+        self.socket.as_mut().poll_accept_no_addr(ctx)
+    }
+}
+
 pub struct Incoming<'a, D: Drive> {
     accept: Accept<'a, D>,
 }
@@ -185,6 +225,24 @@ impl<'a, D: Drive + Clone> Stream for Incoming<'a, D> {
     }
 }
 
+pub struct IncomingNoAddr<'a, D: Drive> {
+    accept: AcceptNoAddr<'a, D>,
+}
+
+impl<'a, D: Drive> IncomingNoAddr<'a, D> {
+    fn inner(self: Pin<&mut Self>) -> Pin<&mut AcceptNoAddr<'a, D>> {
+        unsafe { Pin::map_unchecked_mut(self, |this| &mut this.accept) }
+    }
+}
+
+impl<'a, D: Drive + Clone> Stream for IncomingNoAddr<'a, D> {
+    type Item = io::Result<TcpStream<D>>;
+
+    fn poll_next(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let next = ready!(self.inner().poll(ctx));
+        Poll::Ready(Some(next))
+    }
+}
 
 pub struct Close<'a, D: Drive> {
     socket: Pin<&'a mut TcpListener<D>>,

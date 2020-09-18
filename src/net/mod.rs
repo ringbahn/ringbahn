@@ -5,7 +5,7 @@ use std::io;
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::os::unix::io::RawFd;
 
-pub use listener::{TcpListener, Accept, Close, Incoming};
+pub use listener::{TcpListener, Accept, AcceptNoAddr, Close, Incoming, IncomingNoAddr};
 pub use stream::{TcpStream, Connect};
 
 use nix::sys::socket as nix;
