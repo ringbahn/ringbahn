@@ -22,7 +22,7 @@ pub struct Completion<'cx> {
 }
 
 impl<'cx> Completion<'cx> {
-    pub fn new(mut sqe: SQE<'_>, _sqes: SQEs<'_>, cx: &mut Context<'cx>) -> Completion<'cx> {
+    pub(crate) fn new(mut sqe: SQE<'_>, _sqes: SQEs<'_>, cx: &mut Context<'cx>) -> Completion<'cx> {
         let real = completion::Completion::new(cx.waker().clone());
         unsafe {
             sqe.set_user_data(real.addr());

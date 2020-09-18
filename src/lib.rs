@@ -20,9 +20,3 @@ pub use drive::Drive;
 pub use event::Event;
 #[doc(inline)]
 pub use fs::File;
-
-use std::task::Context;
-
-fn finish<'sq, 'cx>(sqe: iou::SQE<'sq>, sqes: iou::SQEs<'sq>, ctx: &mut Context<'cx>) -> drive::Completion<'cx> {
-    drive::Completion::new(sqe, sqes, ctx)
-}

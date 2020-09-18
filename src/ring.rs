@@ -7,7 +7,7 @@ use futures_core::ready;
 use iou::{SQE, SQEs};
 
 use crate::completion::Completion;
-use crate::drive::Drive;
+use crate::drive::{self, Drive};
 use crate::Cancellation;
 
 use State::*;
@@ -112,14 +112,14 @@ impl<D: Drive> Ring<D> {
                     *state = Lost;
                     unsafe { sqs.hard_linked().next().unwrap().prep_cancel(prev, 0); }
                     let sqe = prepare(&mut sqs);
-                    crate::finish(sqe, sqs, ctx)
+                    drive::Completion::new(sqe, sqs, ctx)
                 }))
             }
             Inert           => {
                 ready!(driver.poll_prepare(ctx, count, |mut sqs, ctx| {
                     *state = Lost;
                     let sqe = prepare(&mut sqs);
-                    crate::finish(sqe, sqs, ctx)
+                    drive::Completion::new(sqe, sqs, ctx)
                 }))
             }
             _               => unreachable!(),
