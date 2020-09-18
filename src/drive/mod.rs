@@ -8,6 +8,7 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use crate::completion;
+use crate::{Submission, Event};
 use iou::{SQE, SQEs};
 
 pub use completion::complete;
@@ -77,4 +78,8 @@ pub trait Drive {
         ctx: &mut Context<'_>,
         eager: bool,
     ) -> Poll<io::Result<u32>>;
+
+    fn submit<E: Event>(self, event: E) -> Submission<E, Self> where Self: Sized {
+        Submission::new(event, self)
+    }
 }

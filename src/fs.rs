@@ -54,15 +54,13 @@ impl<D: Drive + Clone> File<D> {
     /// Open a file
     pub fn open_on_driver(path: impl AsRef<Path>, driver: D) -> Open<D> {
         let flags = OFlag::O_CLOEXEC | OFlag::O_RDONLY;
-        let event = OpenAt::without_dir(path, flags, Mode::from_bits(0o666).unwrap());
-        Open(Submission::new(event, driver))
+        Open(driver.submit(OpenAt::without_dir(path, flags, Mode::from_bits(0o666).unwrap())))
     }
 
     /// Create a file
     pub fn create_on_driver(path: impl AsRef<Path>, driver: D) -> Create<D> {
         let flags = OFlag::O_CLOEXEC | OFlag::O_WRONLY | OFlag::O_CREAT | OFlag::O_TRUNC;
-        let event = OpenAt::without_dir(path, flags, Mode::from_bits(0o666).unwrap());
-        Create(Submission::new(event, driver))
+        Create(driver.submit(OpenAt::without_dir(path, flags, Mode::from_bits(0o666).unwrap())))
     }
 }
 

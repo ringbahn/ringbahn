@@ -50,7 +50,7 @@ impl<D: Drive + Clone> UnixStream<D> {
             Err(e)  => return Connect(Err(Some(e))),
         };
         let addr = Box::new(SockAddr::Unix(UnixAddr::new(path.as_ref()).unwrap()));
-        Connect(Ok(Submission::new(event::Connect { fd, addr }, driver)))
+        Connect(Ok(driver.submit(event::Connect { fd, addr })))
     }
 
     pub fn pair_on_driver(driver: D) -> io::Result<(UnixStream<D>, UnixStream<D>)> {

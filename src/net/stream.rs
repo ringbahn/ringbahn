@@ -46,7 +46,7 @@ impl<D: Drive + Clone> TcpStream<D> {
             Err(e)  => return Connect(Err(Some(e))),
         };
         let addr = Box::new(SockAddr::Inet(nix::sys::socket::InetAddr::from_std(&addr)));
-        Connect(Ok(Submission::new(event::Connect { fd, addr }, driver)))
+        Connect(Ok(driver.submit(event::Connect { fd, addr })))
     }
 }
 
