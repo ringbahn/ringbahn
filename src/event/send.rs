@@ -5,7 +5,6 @@ use iou::sqe::MsgFlags;
 
 use super::{Event, SQE, SQEs, Cancellation};
 
-/// A basic read event.
 pub struct Send {
     pub fd: RawFd,
     pub buf: Box<[u8]>,

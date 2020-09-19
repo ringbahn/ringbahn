@@ -3,7 +3,7 @@ use std::mem::ManuallyDrop;
 
 use super::{Event, SQE, SQEs, Cancellation};
 
-/// A basic read event.
+/// A basic write event.
 pub struct Write {
     pub fd: RawFd,
     pub buf: Box<[u8]>,

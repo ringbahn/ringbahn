@@ -4,7 +4,6 @@ use std::slice;
 
 use super::{Event, SQE, SQEs, Cancellation};
 
-/// A basic read event.
 pub struct FilesUpdate {
     pub files: Box<[RawFd]>,
     pub offset: u32,
