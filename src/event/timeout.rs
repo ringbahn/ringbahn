@@ -3,16 +3,19 @@ use std::time::Duration;
 
 use super::{Event, SQE, SQEs, Cancellation};
 
+use iou::sqe::TimeoutFlags;
+
 pub struct StaticTimeout {
     ts: uring_sys::__kernel_timespec,
     events: u32,
+    flags: TimeoutFlags,
 }
 
 impl StaticTimeout {
-    pub const fn new(duration: Duration, events: u32) -> StaticTimeout {
+    pub const fn new(duration: Duration, events: u32, flags: TimeoutFlags) -> StaticTimeout {
         StaticTimeout {
             ts: timespec(duration),
-            events,
+            events, flags,
         }
     }
 }
@@ -22,7 +25,7 @@ impl Event for &'static StaticTimeout {
 
     unsafe fn prepare<'sq>(&mut self, sqs: &mut SQEs<'sq>) -> SQE<'sq> {
         let mut sqe = sqs.single().unwrap();
-        sqe.prep_timeout(&self.ts, self.events);
+        sqe.prep_timeout(&self.ts, self.events, self.flags);
         sqe
     }
 
@@ -34,13 +37,14 @@ impl Event for &'static StaticTimeout {
 pub struct Timeout {
     ts: Box<uring_sys::__kernel_timespec>,
     events: u32,
+    flags: TimeoutFlags,
 }
 
 impl Timeout {
-    pub fn new(duration: Duration, events: u32) -> Timeout {
+    pub fn new(duration: Duration, events: u32, flags: TimeoutFlags) -> Timeout {
         Timeout {
             ts: Box::new(timespec(duration)),
-            events,
+            events, flags,
         }
     }
 }
@@ -50,7 +54,7 @@ impl Event for Timeout {
 
     unsafe fn prepare<'sq>(&mut self, sqs: &mut SQEs<'sq>) -> SQE<'sq> {
         let mut sqe = sqs.single().unwrap();
-        sqe.prep_timeout(&*self.ts, self.events);
+        sqe.prep_timeout(&*self.ts, self.events, self.flags);
         sqe
     }
 
