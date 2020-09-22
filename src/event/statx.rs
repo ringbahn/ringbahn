@@ -34,9 +34,14 @@ impl Event for Statx {
     }
 
     unsafe fn cancel(this: &mut ManuallyDrop<Self>) -> Cancellation {
-        unsafe fn callback(addr: *mut (), _: usize) {
+        unsafe fn callback(addr: *mut (), path: usize) {
             drop(Box::from_raw(addr as *mut libc::statx));
+            drop(CString::from_raw(path as *mut libc::c_char))
         }
-        Cancellation::new(&mut *this.statx as *mut libc::statx as *mut (), 0, callback)
+        Cancellation::new(
+            &mut *this.statx as *mut libc::statx as *mut (),
+            this.path.as_ptr() as usize,
+            callback,
+        )
     }
 }
