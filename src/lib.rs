@@ -4,6 +4,9 @@ pub mod event;
 pub mod net;
 pub mod unix;
 
+#[doc(hidden)]
+pub mod io;
+
 mod buf;
 mod cancellation;
 mod completion;

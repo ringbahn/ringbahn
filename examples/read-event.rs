@@ -12,13 +12,12 @@ fn main() -> io::Result<()> {
         buf: vec![0; meta.len() as usize].into(),
         offset: 0
     };
-    let submission = Submission::new(event, driver);
-    let content = futures::executor::block_on(async move {
+    let submission = Submission::new(event, driver.clone());
+    futures::executor::block_on(async move {
         let (event, result) = submission.await;
         let bytes_read = result? as usize;
-        let s = String::from_utf8_lossy(&event.buf[0..bytes_read]).to_string();
-        io::Result::Ok(s)
-    })?;
-    println!("{}", content);
-    Ok(())
+        let content = String::from_utf8_lossy(&event.buf[0..bytes_read]).to_string();
+        ringbahn::print!(driver, "{}", content).await;
+        Ok(())
+    })
 }
