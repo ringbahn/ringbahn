@@ -1,4 +1,4 @@
-//! Events that can be scheduled on io-uring with a [`Submission`]
+//! Events that can be scheduled on io-uring with a [`Submission`](crate::Submission)
 
 mod accept;
 mod close;
