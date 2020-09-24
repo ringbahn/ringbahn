@@ -10,7 +10,6 @@ use futures_io::{AsyncRead, AsyncBufRead, AsyncWrite};
 use iou::sqe::SockAddr;
 use nix::sys::socket::UnixAddr;
 
-use crate::buf::Buffer;
 use crate::drive::demo::DemoDriver;
 use crate::{Drive, Ring};
 use crate::event;
@@ -18,19 +17,10 @@ use crate::Submission;
 
 use super::{socket, socketpair};
 
-pub struct UnixStream<D: Drive = DemoDriver<'static>> {
-    ring: Ring<D>,
-    buf: Buffer,
-    active: Op,
-    fd: RawFd,
-}
+use crate::net::TcpStream;
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-enum Op {
-    Read,
-    Write,
-    Close,
-    Nothing,
+pub struct UnixStream<D: Drive = DemoDriver<'static>> {
+    inner: TcpStream<D>,
 }
 
 impl UnixStream {
@@ -64,41 +54,13 @@ impl<D: Drive + Clone> UnixStream<D> {
 impl<D: Drive> UnixStream<D> {
     pub(super) fn from_fd(fd: RawFd, ring: Ring<D>) -> UnixStream<D> {
         UnixStream {
-            buf: Buffer::new(),
-            active: Op::Nothing,
-            fd, ring,
+            inner: TcpStream::from_fd(fd, ring),
         }
     }
 
-    fn guard_op(self: Pin<&mut Self>, op: Op) {
-        let this = unsafe { Pin::get_unchecked_mut(self) };
-        if this.active != Op::Nothing && this.active != op {
-            this.cancel();
-        }
-        this.active = op;
-    }
-
-    fn cancel(&mut self) {
-        self.active = Op::Nothing;
-        self.ring.cancel(self.buf.cancellation());
-    }
-
     #[inline(always)]
-    fn ring(self: Pin<&mut Self>) -> Pin<&mut Ring<D>> {
-        unsafe { Pin::map_unchecked_mut(self, |this| &mut this.ring) }
-    }
-
-    #[inline(always)]
-    fn buf(self: Pin<&mut Self>) -> Pin<&mut Buffer> {
-        unsafe { Pin::map_unchecked_mut(self, |this| &mut this.buf) }
-    }
-
-    #[inline(always)]
-    fn split(self: Pin<&mut Self>) -> (Pin<&mut Ring<D>>, &mut Buffer) {
-        unsafe {
-            let this = Pin::get_unchecked_mut(self);
-            (Pin::new_unchecked(&mut this.ring), &mut this.buf)
-        }
+    fn inner(self: Pin<&mut Self>) -> Pin<&mut TcpStream<D>> {
+        unsafe { Pin::map_unchecked_mut(self, |this| &mut this.inner) }
     }
 }
 
@@ -129,66 +91,33 @@ impl<D: Drive + Clone> Future for Connect<D> {
 }
 
 impl<D: Drive> AsyncRead for UnixStream<D> {
-    fn poll_read(mut self: Pin<&mut Self>, ctx: &mut Context<'_>, buf: &mut [u8])
+    fn poll_read(self: Pin<&mut Self>, ctx: &mut Context<'_>, buf: &mut [u8])
         -> Poll<io::Result<usize>>
     {
-        let mut inner = ready!(self.as_mut().poll_fill_buf(ctx))?;
-        let len = io::Read::read(&mut inner, buf)?;
-        self.consume(len);
-        Poll::Ready(Ok(len))
+        self.inner().poll_read(ctx, buf)
     }
 }
 
 impl<D: Drive> AsyncBufRead for UnixStream<D> {
-    fn poll_fill_buf(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<io::Result<&[u8]>> {
-        self.as_mut().guard_op(Op::Read);
-        let fd = self.fd;
-        let (ring, buf) = self.split();
-        buf.fill_buf(|buf| {
-            let n = ready!(ring.poll(ctx, true, 1, |sqs| unsafe { 
-                let mut sqe = sqs.single().unwrap();
-                sqe.prep_read(fd, buf, 0);
-                sqe
-            }))?;
-            Poll::Ready(Ok(n as u32))
-        })
+    fn poll_fill_buf(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<io::Result<&[u8]>> {
+        self.inner().poll_fill_buf(ctx)
     }
 
     fn consume(self: Pin<&mut Self>, amt: usize) {
-        self.buf().consume(amt);
+        self.inner().consume(amt)
     }
 }
 
 impl<D: Drive> AsyncWrite for UnixStream<D> {
-    fn poll_write(mut self: Pin<&mut Self>, ctx: &mut Context<'_>, slice: &[u8]) -> Poll<io::Result<usize>> {
-        self.as_mut().guard_op(Op::Write);
-        let fd = self.fd;
-        let (ring, buf) = self.split();
-        let data = ready!(buf.fill_buf(|mut buf| {
-            Poll::Ready(Ok(io::Write::write(&mut buf, slice)? as u32))
-        }))?;
-        let n = ready!(ring.poll(ctx, true, 1, |sqs| unsafe {
-            let mut sqe = sqs.single().unwrap();
-            sqe.prep_write(fd, data, 0);
-            sqe
-        }))?;
-        buf.clear();
-        Poll::Ready(Ok(n as usize))
+    fn poll_write(self: Pin<&mut Self>, ctx: &mut Context<'_>, slice: &[u8]) -> Poll<io::Result<usize>> {
+        self.inner().poll_write(ctx, slice)
     }
 
     fn poll_flush(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        ready!(self.poll_write(ctx, &[]))?;
-        Poll::Ready(Ok(()))
+        self.inner().poll_flush(ctx)
     }
 
-    fn poll_close(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        self.as_mut().guard_op(Op::Close);
-        let fd = self.fd;
-        ready!(self.ring().poll(ctx, true, 1, |sqs| unsafe {
-            let mut sqe = sqs.single().unwrap();
-            sqe.prep_close(fd);
-            sqe
-        }))?;
-        Poll::Ready(Ok(()))
+    fn poll_close(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        self.inner().poll_close(ctx)
     }
 }

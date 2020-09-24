@@ -31,6 +31,7 @@ enum Op {
     Write,
     Close,
     Nothing,
+    Closed,
 }
 
 impl TcpStream {
@@ -51,7 +52,7 @@ impl<D: Drive + Clone> TcpStream<D> {
 }
 
 impl<D: Drive> TcpStream<D> {
-    pub(super) fn from_fd(fd: RawFd, ring: Ring<D>) -> TcpStream<D> {
+    pub(crate) fn from_fd(fd: RawFd, ring: Ring<D>) -> TcpStream<D> {
         TcpStream {
             buf: Buffer::new(),
             active: Op::Nothing,
@@ -61,6 +62,9 @@ impl<D: Drive> TcpStream<D> {
 
     fn guard_op(self: Pin<&mut Self>, op: Op) {
         let this = unsafe { Pin::get_unchecked_mut(self) };
+        if this.active == Op::Closed {
+            panic!("Attempted to perform IO on a closed stream");
+        }
         if this.active != Op::Nothing && this.active != op {
             this.cancel();
         }
@@ -88,6 +92,10 @@ impl<D: Drive> TcpStream<D> {
             let this = Pin::get_unchecked_mut(self);
             (Pin::new_unchecked(&mut this.ring), &mut this.buf)
         }
+    }
+
+    fn confirm_close(self: Pin<&mut Self>) {
+        unsafe { Pin::get_unchecked_mut(self).active = Op::Closed; }
     }
 }
 
@@ -173,11 +181,22 @@ impl<D: Drive> AsyncWrite for TcpStream<D> {
     fn poll_close(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<io::Result<()>> {
         self.as_mut().guard_op(Op::Close);
         let fd = self.fd;
-        ready!(self.ring().poll(ctx, true, 1, |sqs| unsafe {
+        ready!(self.as_mut().ring().poll(ctx, true, 1, |sqs| unsafe {
             let mut sqe = sqs.single().unwrap();
             sqe.prep_close(fd);
             sqe
         }))?;
+        self.confirm_close();
         Poll::Ready(Ok(()))
+    }
+}
+
+impl<D: Drive> Drop for TcpStream<D> {
+    fn drop(&mut self) {
+        match self.active {
+            Op::Closed  => { }
+            Op::Nothing => unsafe { libc::close(self.fd); },
+            _           => self.cancel(),
+        }
     }
 }

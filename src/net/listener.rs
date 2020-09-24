@@ -26,6 +26,7 @@ enum Op {
     Nothing = 0,
     Accept,
     Close,
+    Closed,
 }
 
 impl TcpListener {
@@ -60,6 +61,9 @@ impl<D: Drive> TcpListener<D> {
 
     fn guard_op(self: Pin<&mut Self>, op: Op) {
         let this = unsafe { Pin::get_unchecked_mut(self) };
+        if this.active == Op::Closed {
+            panic!("Attempted to perform IO on a closed TcpListener");
+        }
         if this.active != Op::Nothing && this.active != op {
             this.cancel();
         }
@@ -78,6 +82,7 @@ impl<D: Drive> TcpListener<D> {
                 }
             }
             Op::Close   => Cancellation::null(),
+            Op::Closed  => return,
             Op::Nothing => return,
         };
         self.active = Op::Nothing;
@@ -100,6 +105,10 @@ impl<D: Drive> TcpListener<D> {
             }
             (Pin::new_unchecked(&mut this.ring), &mut **this.addr.as_mut().unwrap())
         }
+    }
+
+    fn confirm_close(self: Pin<&mut Self>) {
+        unsafe { Pin::get_unchecked_mut(self).active = Op::Closed; }
     }
 }
 
@@ -176,6 +185,7 @@ impl<D: Drive + Clone> TcpListener<D> {
 impl<D: Drive> Drop for TcpListener<D> {
     fn drop(&mut self) {
         match self.active {
+            Op::Closed  => { }
             Op::Nothing => unsafe { libc::close(self.fd); }
             _           => self.cancel(),
         }
@@ -259,6 +269,7 @@ impl<'a, D: Drive> Future for Close<'a, D> {
             sqe.prep_close(fd);
             sqe
         }))?;
+        self.socket.as_mut().confirm_close();
         Poll::Ready(Ok(()))
     }
 }

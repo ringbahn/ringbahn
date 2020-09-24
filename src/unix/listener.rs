@@ -25,6 +25,7 @@ enum Op {
     Nothing = 0,
     Accept,
     Close,
+    Closed,
 }
 
 impl UnixListener {
@@ -56,6 +57,9 @@ impl<D: Drive> UnixListener<D> {
 
     fn guard_op(self: Pin<&mut Self>, op: Op) {
         let this = unsafe { Pin::get_unchecked_mut(self) };
+        if this.active == Op::Closed {
+            panic!("Attempted to perform IO on a closed UnixListener");
+        }
         if this.active != Op::Nothing && this.active != op {
             this.cancel();
         }
@@ -63,7 +67,7 @@ impl<D: Drive> UnixListener<D> {
     }
 
     fn cancel(&mut self) {
-        if self.active != Op::Nothing {
+        if !matches!(self.active, Op::Nothing | Op::Closed) {
             self.active = Op::Nothing;
             self.ring.cancel(Cancellation::null());
         }
@@ -71,6 +75,10 @@ impl<D: Drive> UnixListener<D> {
 
     fn ring(self: Pin<&mut Self>) -> Pin<&mut Ring<D>> {
         unsafe { Pin::map_unchecked_mut(self, |this| &mut this.ring) }
+    }
+
+    fn confirm_close(self: Pin<&mut Self>) {
+        unsafe { Pin::get_unchecked_mut(self).active = Op::Closed; }
     }
 }
 
@@ -109,6 +117,7 @@ impl<D: Drive + Clone> UnixListener<D> {
 impl<D: Drive> Drop for UnixListener<D> {
     fn drop(&mut self) {
         match self.active {
+            Op::Closed  => { }
             Op::Nothing => unsafe { libc::close(self.fd); }
             _           => self.cancel(),
         }
@@ -162,6 +171,7 @@ impl<'a, D: Drive> Future for Close<'a, D> {
             sqe.prep_close(fd);
             sqe
         }))?;
+        self.socket.as_mut().confirm_close();
         Poll::Ready(Ok(()))
     }
 }

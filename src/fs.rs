@@ -36,6 +36,7 @@ enum Op {
     Close,
     Nothing,
     Statx,
+    Closed,
 }
 
 impl File {
@@ -94,6 +95,9 @@ impl<D: Drive> File<D> {
 
     fn guard_op(self: Pin<&mut Self>, op: Op) {
         let this = unsafe { Pin::get_unchecked_mut(self) };
+        if this.active == Op::Closed {
+            panic!("Attempted to perform IO on a closed File");
+        }
         if this.active != Op::Nothing && this.active != op {
             this.cancel();
         }
@@ -146,6 +150,10 @@ impl<D: Drive> File<D> {
     #[inline(always)]
     fn pos(self: Pin<&mut Self>) -> Pin<&mut u64> {
         unsafe { Pin::map_unchecked_mut(self, |this| &mut this.pos) }
+    }
+
+    fn confirm_close(self: Pin<&mut Self>) {
+        unsafe { Pin::get_unchecked_mut(self).active = Op::Closed; }
     }
 }
 
@@ -207,11 +215,12 @@ impl<D: Drive> AsyncWrite for File<D> {
     fn poll_close(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<io::Result<()>> {
         self.as_mut().guard_op(Op::Close);
         let fd = self.fd;
-        ready!(self.ring().poll(ctx, true, 1, |sqs| unsafe {
+        ready!(self.as_mut().ring().poll(ctx, true, 1, |sqs| unsafe {
             let mut sqe = sqs.single().unwrap();
             sqe.prep_close(fd);
             sqe
         }))?;
+        self.confirm_close();
         Poll::Ready(Ok(()))
     }
 }
@@ -271,6 +280,7 @@ impl<D: Drive> From<File<D>> for fs::File {
 impl<D: Drive> Drop for File<D> {
     fn drop(&mut self) {
         match self.active {
+            Op::Closed  => { }
             Op::Nothing => unsafe { libc::close(self.fd); },
             _           => self.cancel(),
         }
