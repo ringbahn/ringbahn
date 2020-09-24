@@ -56,11 +56,11 @@ pub async fn __print<D: Drive>(driver: D, bytes: impl Into<Cow<'static, [u8]>>) 
 }
 
 #[doc(hidden)]
-pub async fn __eprint<D: Drive>(driver: D, bytes: Cow<'static, [u8]>) {
+pub async fn __eprint<D: Drive>(driver: D, bytes: impl Into<Cow<'static, [u8]>>) {
     Print {
         ring: Ring::new(driver),
         fd: 2,
-        bytes,
+        bytes: bytes.into(),
         idx: 0,
     }.await.expect("printing to stderr failed")
 }
