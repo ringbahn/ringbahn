@@ -1,33 +1,28 @@
-use std::alloc::{dealloc, Layout};
 use std::os::unix::io::RawFd;
 use std::mem::ManuallyDrop;
-use std::net::SocketAddr;
 
-use super::{Event, Cancellation};
+use iou::sqe::SockAddr;
+
+use super::{Event, SQE, SQEs, Cancellation};
 
 pub struct Connect {
     pub fd: RawFd,
-    addr: Box<libc::sockaddr_storage>,
-    addrlen: libc::socklen_t,
-}
-
-impl Connect {
-    pub fn new(fd: RawFd, addr: SocketAddr) -> Connect {
-        let (addr, addrlen) = crate::net::addr_to_c(addr);
-        Connect { fd, addr, addrlen }
-    }
+    pub addr: Box<SockAddr>,
 }
 
 impl Event for Connect {
-    unsafe fn prepare(&mut self, sqe: &mut iou::SubmissionQueueEvent<'_>) {
-        let addr = &mut *self.addr as *mut libc::sockaddr_storage as *mut libc::sockaddr;
-        uring_sys::io_uring_prep_connect(sqe.raw_mut(), self.fd, addr, self.addrlen);
+    fn sqes_needed(&self) -> u32 { 1 }
+
+    unsafe fn prepare<'sq>(&mut self, sqs: &mut SQEs<'sq>) -> SQE<'sq> {
+        let mut sqe = sqs.single().unwrap();
+        sqe.prep_connect(self.fd, &mut *self.addr);
+        sqe
     }
 
     unsafe fn cancel(this: &mut ManuallyDrop<Self>) -> Cancellation {
         unsafe fn callback(addr: *mut (), _: usize) {
-            dealloc(addr as *mut u8, Layout::new::<libc::sockaddr_storage>());
+            drop(Box::from_raw(addr as *mut SockAddr));
         }
-        Cancellation::new(&mut *this.addr as *mut libc::sockaddr_storage as *mut (), 0, callback)
+        Cancellation::new(&mut *this.addr as *mut SockAddr as *mut (), 0, callback)
     }
 }

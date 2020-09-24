@@ -1,21 +1,22 @@
 use std::os::unix::io::RawFd;
 use std::mem::ManuallyDrop;
 
+use iou::sqe::MsgFlags;
+
 use super::{Event, SQE, SQEs, Cancellation};
 
-/// A basic read event.
-pub struct Read {
+pub struct Send {
     pub fd: RawFd,
     pub buf: Box<[u8]>,
-    pub offset: u64,
+    pub flags: MsgFlags,
 }
 
-impl Event for Read {
+impl Event for Send {
     fn sqes_needed(&self) -> u32 { 1 }
 
     unsafe fn prepare<'sq>(&mut self, sqs: &mut SQEs<'sq>) -> SQE<'sq> {
         let mut sqe = sqs.single().unwrap();
-        sqe.prep_read(self.fd, &mut self.buf[..], self.offset);
+        sqe.prep_send(self.fd, &self.buf[..], self.flags);
         sqe
     }
 

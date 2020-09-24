@@ -1,30 +1,29 @@
 use std::io::IoSlice; 
-use std::os::unix::io::AsRawFd;
+use std::os::unix::io::RawFd;
 use std::mem::ManuallyDrop;
-use std::marker::Unpin;
 
-use super::{Event, Cancellation};
+use super::{Event, SQE, SQEs, Cancellation};
 
 /// A `writev` event.
-pub struct WriteV<'a, T> {
-    pub io: &'a T,
+pub struct WriteVectored {
+    pub fd: RawFd,
     pub bufs: Vec<Box<[u8]>>,
-    pub offset: usize
+    pub offset: u64,
 }
 
-impl<'a, T: AsRawFd + Unpin> WriteV<'a, T> {
-    pub fn new(io: &'a T, bufs: Vec<Box<[u8]>>, offset: usize) -> WriteV<T> {
-        WriteV { io, bufs, offset }
-    }
-
+impl WriteVectored {
     fn iovecs(&self) -> &[IoSlice] {
         unsafe { & *(&self.bufs[..] as *const [Box<[u8]>] as *const [IoSlice]) }
     }
 }
 
-impl<'a, T: AsRawFd + Unpin> Event for WriteV<'a, T> {
-    unsafe fn prepare(&mut self, sqe: &mut iou::SubmissionQueueEvent<'_>) {
-        sqe.prep_write_vectored(self.io.as_raw_fd(), self.iovecs(), self.offset);
+impl Event for WriteVectored {
+    fn sqes_needed(&self) -> u32 { 1 }
+
+    unsafe fn prepare<'sq>(&mut self, sqs: &mut SQEs<'sq>) -> SQE<'sq> {
+        let mut sqe = sqs.single().unwrap();
+        sqe.prep_write_vectored(self.fd, self.iovecs(), self.offset);
+        sqe
     }
 
     unsafe fn cancel(this: &mut ManuallyDrop<Self>) -> Cancellation {

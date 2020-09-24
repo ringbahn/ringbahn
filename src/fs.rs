@@ -11,6 +11,7 @@ use std::task::{Context, Poll};
 
 use futures_core::ready;
 use futures_io::{AsyncRead, AsyncBufRead, AsyncWrite, AsyncSeek};
+use iou::sqe::{OFlag, Mode};
 
 use crate::buf::Buffer;
 use crate::drive::Drive;
@@ -25,7 +26,7 @@ pub struct File<D: Drive = DemoDriver<'static>> {
     fd: RawFd,
     active: Op,
     buf: Buffer,
-    pos: usize,
+    pos: u64,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -52,16 +53,14 @@ impl File {
 impl<D: Drive + Clone> File<D> {
     /// Open a file
     pub fn open_on_driver(path: impl AsRef<Path>, driver: D) -> Open<D> {
-        let flags = libc::O_CLOEXEC | libc::O_RDONLY;
-        let event = OpenAt::new(path, libc::AT_FDCWD, flags, 0o666);
-        Open(Submission::new(event, driver))
+        let flags = OFlag::O_CLOEXEC | OFlag::O_RDONLY;
+        Open(driver.submit(OpenAt::without_dir(path, flags, Mode::from_bits(0o666).unwrap())))
     }
 
     /// Create a file
     pub fn create_on_driver(path: impl AsRef<Path>, driver: D) -> Create<D> {
-        let flags = libc::O_CLOEXEC | libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC;
-        let event = OpenAt::new(path, libc::AT_FDCWD, flags, 0o666);
-        Create(Submission::new(event, driver))
+        let flags = OFlag::O_CLOEXEC | OFlag::O_WRONLY | OFlag::O_CREAT | OFlag::O_TRUNC;
+        Create(driver.submit(OpenAt::without_dir(path, flags, Mode::from_bits(0o666).unwrap())))
     }
 }
 
@@ -106,26 +105,28 @@ impl<D: Drive> File<D> {
         self.ring.cancel(self.buf.cancellation());
     }
 
-    fn poll_file_size(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<io::Result<usize>> {
+    fn poll_file_size(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<io::Result<u64>> {
         static EMPTY: libc::c_char = 0;
+        use std::ffi::CStr;
 
         self.as_mut().guard_op(Op::Statx);
         let fd = self.fd;
         let (ring, buf, _) = self.split();
         let statx = buf.as_statx();
-        let flags = libc::AT_EMPTY_PATH;
-        let mask = libc::STATX_SIZE;
+        let flags = iou::sqe::StatxFlags::AT_EMPTY_PATH;
+        let mask = iou::sqe::StatxMode::STATX_SIZE;
         unsafe {
-            ready!(ring.poll(ctx, true, |sqe| {
-                uring_sys::io_uring_prep_statx(sqe.raw_mut(), fd, &EMPTY, flags, mask, statx);
+            ready!(ring.poll(ctx, true, 1, |sqs| {
+                let mut sqe = sqs.single().unwrap();
+                sqe.prep_statx(fd, CStr::from_ptr(&EMPTY), flags, mask, &mut *statx);
+                sqe
             }))?;
-
-            Poll::Ready(Ok((*statx).stx_size as usize))
+            Poll::Ready(Ok((*statx).stx_size))
         }
     }
 
     #[inline(always)]
-    fn split(self: Pin<&mut Self>) -> (Pin<&mut Ring<D>>, &mut Buffer, &mut usize) {
+    fn split(self: Pin<&mut Self>) -> (Pin<&mut Ring<D>>, &mut Buffer, &mut u64) {
         unsafe {
             let this = Pin::get_unchecked_mut(self);
             (Pin::new_unchecked(&mut this.ring), &mut this.buf, &mut this.pos)
@@ -143,7 +144,7 @@ impl<D: Drive> File<D> {
     }
 
     #[inline(always)]
-    fn pos(self: Pin<&mut Self>) -> Pin<&mut usize> {
+    fn pos(self: Pin<&mut Self>) -> Pin<&mut u64> {
         unsafe { Pin::map_unchecked_mut(self, |this| &mut this.pos) }
     }
 }
@@ -165,8 +166,12 @@ impl<D: Drive> AsyncBufRead for File<D> {
         let fd = self.fd;
         let (ring, buf, pos) = self.split();
         buf.fill_buf(|buf| {
-            let n = ready!(ring.poll(ctx, true, |sqe| unsafe { sqe.prep_read(fd, buf, *pos) }))?;
-            *pos += n;
+            let n = ready!(ring.poll(ctx, true, 1, |sqs| unsafe {
+                let mut sqe = sqs.single().unwrap();
+                sqe.prep_read(fd, buf, *pos);
+                sqe
+            }))?;
+            *pos += n as u64;
             Poll::Ready(Ok(n as u32))
         })
     }
@@ -184,10 +189,14 @@ impl<D: Drive> AsyncWrite for File<D> {
         let data = ready!(buf.fill_buf(|mut buf| {
             Poll::Ready(Ok(io::Write::write(&mut buf, slice)? as u32))
         }))?;
-        let n = ready!(ring.poll(ctx, true, |sqe| unsafe { sqe.prep_write(fd, data, *pos) }))?;
-        *pos += n;
+        let n = ready!(ring.poll(ctx, true, 1, |sqs| unsafe {
+            let mut sqe = sqs.single().unwrap();
+            sqe.prep_write(fd, data, *pos);
+            sqe
+        }))?;
+        *pos += n as u64;
         buf.clear();
-        Poll::Ready(Ok(n))
+        Poll::Ready(Ok(n as usize))
     }
 
     fn poll_flush(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<io::Result<()>> {
@@ -198,8 +207,10 @@ impl<D: Drive> AsyncWrite for File<D> {
     fn poll_close(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<io::Result<()>> {
         self.as_mut().guard_op(Op::Close);
         let fd = self.fd;
-        ready!(self.ring().poll(ctx, true, |sqe| unsafe {
-            uring_sys::io_uring_prep_close(sqe.raw_mut(), fd)
+        ready!(self.ring().poll(ctx, true, 1, |sqs| unsafe {
+            let mut sqe = sqs.single().unwrap();
+            sqe.prep_close(fd);
+            sqe
         }))?;
         Poll::Ready(Ok(()))
     }
@@ -211,8 +222,8 @@ impl<D: Drive> AsyncSeek for File<D> {
     {
         let (whence, offset) = match pos {
             io::SeekFrom::Start(n) => {
-                *self.as_mut().pos() = n as usize;
-                return Poll::Ready(Ok(self.pos as u64));
+                *self.as_mut().pos() = n;
+                return Poll::Ready(Ok(self.pos));
             }
             io::SeekFrom::Current(n) => (self.pos, n),
             io::SeekFrom::End(n)     => {
@@ -220,7 +231,7 @@ impl<D: Drive> AsyncSeek for File<D> {
             }
         };
         let valid_seek = if offset.is_negative() {
-            match whence.checked_sub(offset.abs() as usize) {
+            match whence.checked_sub(offset.abs() as u64) {
                 Some(valid_seek) => valid_seek,
                 None => {
                     let invalid = io::Error::from(io::ErrorKind::InvalidInput);
@@ -228,7 +239,7 @@ impl<D: Drive> AsyncSeek for File<D> {
                 }
             }
         } else {
-            match whence.checked_add(offset as usize) {
+            match whence.checked_add(offset as u64) {
                 Some(valid_seek) => valid_seek,
                 None => {
                     let overflow = io::Error::from_raw_os_error(libc::EOVERFLOW);
@@ -237,7 +248,7 @@ impl<D: Drive> AsyncSeek for File<D> {
             }
         };
         *self.as_mut().pos() = valid_seek;
-        Poll::Ready(Ok(self.pos as u64))
+        Poll::Ready(Ok(self.pos))
     }
 }
 

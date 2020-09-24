@@ -1,7 +1,8 @@
 use std::fs::File;
+use std::os::unix::io::AsRawFd;
 
 use ringbahn::Submission;
-use ringbahn::event::ReadV;
+use ringbahn::event::ReadVectored;
 use ringbahn::drive::demo;
 
 const ASSERT: &[u8] = b"But this formidable power of death -";
@@ -12,7 +13,11 @@ fn readv_file() {
     let vec1 = Box::new([0; 4]);
     let vec2 = Box::new([0; 5]);
     let vec3 = Box::new([0; 10]);
-    let readv: ReadV<'_, File> = ReadV::new(&file, vec![vec1, vec2, vec3], 0);
+    let readv = ReadVectored {
+        fd: file.as_raw_fd(),
+        bufs: vec![vec1, vec2, vec3],
+        offset: 0,
+    };
     let (readv, result) = futures::executor::block_on(Submission::new(readv, demo::driver()));
     assert!(result.is_ok());
     assert_eq!(readv.bufs[0][..], ASSERT[0..4]); 

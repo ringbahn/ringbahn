@@ -1,14 +1,14 @@
 use std::io;
 use std::future::Future;
-use std::net::ToSocketAddrs;
 use std::os::unix::io::RawFd;
+use std::path::Path;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use futures_core::ready;
 use futures_io::{AsyncRead, AsyncBufRead, AsyncWrite};
 use iou::sqe::SockAddr;
-use nix::sys::socket::SockProtocol;
+use nix::sys::socket::UnixAddr;
 
 use crate::buf::Buffer;
 use crate::drive::demo::DemoDriver;
@@ -16,9 +16,9 @@ use crate::{Drive, Ring};
 use crate::event;
 use crate::Submission;
 
-use super::socket;
+use super::{socket, socketpair};
 
-pub struct TcpStream<D: Drive = DemoDriver<'static>> {
+pub struct UnixStream<D: Drive = DemoDriver<'static>> {
     ring: Ring<D>,
     buf: Buffer,
     active: Op,
@@ -33,26 +33,37 @@ enum Op {
     Nothing,
 }
 
-impl TcpStream {
-    pub fn connect<A: ToSocketAddrs>(addr: A) -> Connect {
-        TcpStream::connect_on_driver(addr, DemoDriver::default())
+impl UnixStream {
+    pub fn connect(path: &impl AsRef<Path>) -> Connect {
+        UnixStream::connect_on_driver(path, DemoDriver::default())
+    }
+
+    pub fn pair() -> io::Result<(UnixStream, UnixStream)> {
+        UnixStream::pair_on_driver(DemoDriver::default())
     }
 }
 
-impl<D: Drive + Clone> TcpStream<D> {
-    pub fn connect_on_driver<A: ToSocketAddrs>(addr: A, driver: D) -> Connect<D> {
-        let (fd, addr) = match socket(addr, SockProtocol::Tcp) {
+impl<D: Drive + Clone> UnixStream<D> {
+    pub fn connect_on_driver(path: &impl AsRef<Path>, driver: D) -> Connect<D> {
+        let fd = match socket() {
             Ok(fd)  => fd,
             Err(e)  => return Connect(Err(Some(e))),
         };
-        let addr = Box::new(SockAddr::Inet(nix::sys::socket::InetAddr::from_std(&addr)));
+        let addr = Box::new(SockAddr::Unix(UnixAddr::new(path.as_ref()).unwrap()));
         Connect(Ok(driver.submit(event::Connect { fd, addr })))
+    }
+
+    pub fn pair_on_driver(driver: D) -> io::Result<(UnixStream<D>, UnixStream<D>)> {
+        let (fd1, fd2) = socketpair()?;
+        let ring1 = Ring::new(driver.clone());
+        let ring2 = Ring::new(driver);
+        Ok((UnixStream::from_fd(fd1, ring1), UnixStream::from_fd(fd2, ring2)))
     }
 }
 
-impl<D: Drive> TcpStream<D> {
-    pub(super) fn from_fd(fd: RawFd, ring: Ring<D>) -> TcpStream<D> {
-        TcpStream {
+impl<D: Drive> UnixStream<D> {
+    pub(super) fn from_fd(fd: RawFd, ring: Ring<D>) -> UnixStream<D> {
+        UnixStream {
             buf: Buffer::new(),
             active: Op::Nothing,
             fd, ring,
@@ -96,7 +107,7 @@ pub struct Connect<D: Drive = DemoDriver<'static>>(
 );
 
 impl<D: Drive + Clone> Future for Connect<D> {
-    type Output = io::Result<TcpStream<D>>;
+    type Output = io::Result<UnixStream<D>>;
 
     fn poll(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<Self::Output> {
         unsafe {
@@ -106,7 +117,7 @@ impl<D: Drive + Clone> Future for Connect<D> {
                     let (connect, result) = ready!(submission.as_mut().poll(ctx));
                     result?;
                     let driver = submission.driver().clone();
-                    Poll::Ready(Ok(TcpStream::from_fd(connect.fd, Ring::new(driver))))
+                    Poll::Ready(Ok(UnixStream::from_fd(connect.fd, Ring::new(driver))))
                 }
                 Err(err)        => {
                     let err = err.take().expect("polled Connect future after completion");
@@ -117,7 +128,7 @@ impl<D: Drive + Clone> Future for Connect<D> {
     }
 }
 
-impl<D: Drive> AsyncRead for TcpStream<D> {
+impl<D: Drive> AsyncRead for UnixStream<D> {
     fn poll_read(mut self: Pin<&mut Self>, ctx: &mut Context<'_>, buf: &mut [u8])
         -> Poll<io::Result<usize>>
     {
@@ -128,7 +139,7 @@ impl<D: Drive> AsyncRead for TcpStream<D> {
     }
 }
 
-impl<D: Drive> AsyncBufRead for TcpStream<D> {
+impl<D: Drive> AsyncBufRead for UnixStream<D> {
     fn poll_fill_buf(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<io::Result<&[u8]>> {
         self.as_mut().guard_op(Op::Read);
         let fd = self.fd;
@@ -148,7 +159,7 @@ impl<D: Drive> AsyncBufRead for TcpStream<D> {
     }
 }
 
-impl<D: Drive> AsyncWrite for TcpStream<D> {
+impl<D: Drive> AsyncWrite for UnixStream<D> {
     fn poll_write(mut self: Pin<&mut Self>, ctx: &mut Context<'_>, slice: &[u8]) -> Poll<io::Result<usize>> {
         self.as_mut().guard_op(Op::Write);
         let fd = self.fd;

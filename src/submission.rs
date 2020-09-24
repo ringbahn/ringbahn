@@ -28,6 +28,15 @@ impl<E: Event, D: Drive> Submission<E, D> {
         self.ring.driver()
     }
 
+    pub fn replace_event(self: Pin<&mut Self>, event: E) {
+        let (ring, event_slot) = self.split();
+        if let Some(event) = &mut *event_slot {
+            let cancellation = unsafe { Event::cancel(event) };
+            ring.cancel_pinned(cancellation);
+        }
+        *event_slot = Some(ManuallyDrop::new(event));
+    }
+
     fn split(self: Pin<&mut Self>) -> (Pin<&mut Ring<D>>, &mut Option<ManuallyDrop<E>>) {
         unsafe {
             let this = Pin::get_unchecked_mut(self);
@@ -40,13 +49,15 @@ impl<E, D> Future for Submission<E, D> where
     E: Event,
     D: Drive,
 {
-    type Output = (E, io::Result<usize>);
+    type Output = (E, io::Result<u32>);
 
     fn poll(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<Self::Output> {
         let (ring, event) = self.split();
 
         let result = if let Some(event) = event {
-            ready!(ring.poll(ctx, event.is_eager(), |sqe| unsafe { event.prepare(sqe) }))
+            let is_eager = event.is_eager();
+            let count = event.sqes_needed();
+            ready!(ring.poll(ctx, is_eager, count, |sqs| unsafe { event.prepare(sqs) }))
         } else {
             panic!("polled Submission after completion")
         };

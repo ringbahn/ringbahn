@@ -1,24 +1,49 @@
-//! Events that can be scheduled on io-uring with a [`Submission`]
+//! Events that can be scheduled on io-uring with a [`Submission`](crate::Submission)
 
-mod connect;
+mod accept;
 mod close;
+mod connect;
+mod epoll_ctl;
+mod fadvise;
+mod fallocate;
+mod files_update;
+mod fsync;
+mod openat;
+mod provide_buffers;
 mod read;
 mod readv;
-mod openat;
+mod recv;
+mod send;
+mod splice;
+mod statx;
+mod timeout;
 mod write;
 mod writev;
 
 use std::mem::ManuallyDrop;
 
 use crate::cancellation::Cancellation;
+use iou::{SQE, SQEs};
 
-pub use connect::Connect;
+pub use accept::Accept;
 pub use close::Close;
-pub use read::Read;
-pub use readv::ReadV;
+pub use connect::Connect;
+pub use epoll_ctl::EpollCtl;
+pub use fadvise::Fadvise;
+pub use fallocate::Fallocate;
+pub use files_update::FilesUpdate;
+pub use fsync::Fsync;
 pub use openat::OpenAt;
+pub use provide_buffers::{ProvideBuffers, RemoveBuffers};
+pub use read::Read;
+pub use readv::ReadVectored;
+pub use recv::Recv;
+pub use send::Send;
+pub use splice::Splice;
+pub use statx::Statx;
+pub use timeout::{Timeout, StaticTimeout};
 pub use write::Write;
-pub use writev::WriteV;
+pub use writev::WriteVectored;
 
 /// An IO event that can be scheduled on an io-uring driver.
 ///
@@ -32,6 +57,8 @@ pub use writev::WriteV;
 /// implementer has upheld. The implementer is not allowed to add any additional invariants that
 /// the caller must uphold that are not required by the trait.
 pub trait Event {
+    fn sqes_needed(&self) -> u32;
+
     /// Prepare an event to be submitted using the SQE argument.
     ///
     /// ## Safety
@@ -51,7 +78,7 @@ pub trait Event {
     /// In essence implementing prepare, users can write code ass if any heap addresses passed to
     /// the  kernel have passed ownership of that data to the kernel for the time that the event is
     /// completed.
-    unsafe fn prepare(&mut self, sqe: &mut iou::SubmissionQueueEvent<'_>);
+    unsafe fn prepare<'a>(&mut self, sqs: &mut SQEs<'a>) -> SQE<'a>;
 
     /// Return the cancellation callback for this event.
     ///

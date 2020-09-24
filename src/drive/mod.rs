@@ -8,8 +8,10 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use crate::completion;
+use crate::{Submission, Event};
+use iou::{SQE, SQEs};
 
-pub use crate::completion::complete;
+pub use completion::complete;
 
 /// A completion which will be used to wake the task waiting on this event.
 ///
@@ -21,7 +23,12 @@ pub struct Completion<'cx> {
 }
 
 impl<'cx> Completion<'cx> {
-    pub(crate) fn new(real: completion::Completion, _: &mut Context<'cx>) -> Completion<'cx> {
+    pub(crate) fn new(mut sqe: SQE<'_>, _sqes: SQEs<'_>, cx: &mut Context<'cx>) -> Completion<'cx> {
+        let real = completion::Completion::new(cx.waker().clone());
+        unsafe {
+            sqe.set_user_data(real.addr());
+        }
+
         Completion { real, marker: PhantomData }
     }
 }
@@ -34,7 +41,7 @@ impl<'cx> Completion<'cx> {
 pub trait Drive {
     /// Prepare an event on the submission queue.
     ///
-    /// The implementer is responsible for provisioning an [`iou::SubmissionQueueEvent`] from the
+    /// The implementer is responsible for provisioning an [`iou::SQE`] from the
     /// submission queue. Once an SQE is available, the implementer should pass it to the
     /// `prepare` callback, which constructs a [`Completion`], and return that `Completion` to the
     /// caller.
@@ -48,7 +55,8 @@ pub trait Drive {
     fn poll_prepare<'cx>(
         self: Pin<&mut Self>,
         ctx: &mut Context<'cx>,
-        prepare: impl FnOnce(iou::SubmissionQueueEvent<'_>, &mut Context<'cx>) -> Completion<'cx>,
+        count: u32,
+        prepare: impl FnOnce(SQEs<'_>, &mut Context<'cx>) -> Completion<'cx>,
     ) -> Poll<Completion<'cx>>;
 
     /// Submit all of the events on the submission queue.
@@ -69,5 +77,9 @@ pub trait Drive {
         self: Pin<&mut Self>,
         ctx: &mut Context<'_>,
         eager: bool,
-    ) -> Poll<io::Result<usize>>;
+    ) -> Poll<io::Result<u32>>;
+
+    fn submit<E: Event>(self, event: E) -> Submission<E, Self> where Self: Sized {
+        Submission::new(event, self)
+    }
 }

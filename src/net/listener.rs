@@ -1,27 +1,24 @@
-use std::alloc::{alloc, dealloc, Layout};
 use std::io;
 use std::future::Future;
-use std::mem;
-use std::net::{SocketAddr, ToSocketAddrs};
+use std::net::{ToSocketAddrs, SocketAddr};
 use std::os::unix::io::{RawFd};
 use std::pin::Pin;
-use std::ptr;
 use std::task::{Context, Poll};
 
 use futures_core::{ready, Stream};
+use nix::sys::socket::{self as nix_socket, SockProtocol, SockFlag};
 
 use crate::drive::demo::DemoDriver;
 use crate::Cancellation;
 use crate::{Drive, Ring};
 
-use super::{TcpStream, addr_from_c, addr_to_c, socket};
+use super::TcpStream;
 
 pub struct TcpListener<D: Drive = DemoDriver<'static>> {
     ring: Ring<D>,
     fd: RawFd,
     active: Op,
-    addr: *mut libc::sockaddr_storage,
-    len: *mut libc::socklen_t,
+    addr: Option<Box<iou::sqe::SockAddrStorage>>,
 }
 
 #[derive(Eq, PartialEq, Copy, Clone, Debug)]
@@ -39,29 +36,16 @@ impl TcpListener {
 
 impl<D: Drive> TcpListener<D> {
     pub fn bind_on_driver<A: ToSocketAddrs>(addr: A, driver: D) -> io::Result<TcpListener<D>> {
-        let (fd, addr) = socket(addr)?;
-        let val = &1 as *const libc::c_int as *const libc::c_void;
-        let len = mem::size_of::<libc::c_int>() as u32;
-        unsafe {
-            if libc::setsockopt(fd, libc::SOL_SOCKET, libc::SO_REUSEADDR, val, len) < 0 {
-                return Err(io::Error::last_os_error());
-            }
-
-            let (mut addr, addrlen) = addr_to_c(addr);
-            let addr = &mut *addr as *mut libc::sockaddr_storage as *mut libc::sockaddr;
-            if libc::bind(fd, addr, addrlen) < 0 {
-                return Err(io::Error::last_os_error());
-            }
-
-            if libc::listen(fd, 128) < 0 {
-                return Err(io::Error::last_os_error());
-            }
-        }
+        let (fd, addr) = super::socket(addr, SockProtocol::Tcp)?;
+        let addr = iou::sqe::SockAddr::Inet(nix_socket::InetAddr::from_std(&addr));
+        nix_socket::setsockopt(fd, nix_socket::sockopt::ReuseAddr, &true)
+            .map_err(|e| e.as_errno().unwrap_or(nix::errno::Errno::EIO))?;
+        nix_socket::bind(fd, &addr).map_err(|e| e.as_errno().unwrap_or(nix::errno::Errno::EIO))?;
+        nix_socket::listen(fd, 128).map_err(|e| e.as_errno().unwrap_or(nix::errno::Errno::EIO))?;
         let ring = Ring::new(driver);
         Ok(TcpListener {
             active: Op::Nothing,
-            addr: ptr::null_mut(),
-            len: ptr::null_mut(),
+            addr: None,
             fd, ring,
         })
     }
@@ -84,13 +68,13 @@ impl<D: Drive> TcpListener<D> {
 
     fn cancel(&mut self) {
         let cancellation = match self.active {
-            Op::Accept  => {
-                unsafe fn callback(addr: *mut (), addrlen: usize) {
-                    dealloc(addr as *mut u8, Layout::new::<libc::sockaddr_storage>());
-                    dealloc(addrlen as *mut u8, Layout::new::<libc::socklen_t>());
+            Op::Accept => {
+                unsafe fn callback(addr: *mut (), _: usize) {
+                    drop(Box::from_raw(addr as *mut iou::sqe::SockAddrStorage))
                 }
                 unsafe {
-                    Cancellation::new(self.addr as *mut (), self.len as usize, callback)
+                    let addr: &mut iou::sqe::SockAddrStorage = &mut **self.addr.as_mut().unwrap();
+                    Cancellation::new(addr as *mut iou::sqe::SockAddrStorage as *mut (), 0, callback)
                 }
             }
             Op::Close   => Cancellation::null(),
@@ -100,27 +84,22 @@ impl<D: Drive> TcpListener<D> {
         self.ring.cancel(cancellation);
     }
 
-    fn addr(self: Pin<&mut Self>) -> (*mut libc::sockaddr, *mut libc::socklen_t) {
-        unsafe {
-            let this = Pin::get_unchecked_mut(self);
-            if this.addr == ptr::null_mut() {
-                this.addr = alloc(Layout::new::<libc::sockaddr_storage>()) as *mut _;
-                this.len = alloc(Layout::new::<libc::socklen_t>()) as *mut _;
-                *this.len = mem::size_of::<libc::sockaddr_storage>() as _;
-            }
-
-            (this.addr as *mut libc::sockaddr, this.len)
-        }
-    }
-
     unsafe fn drop_addr(self: Pin<&mut Self>) {
-        let this = Pin::get_unchecked_mut(self);
-        dealloc(mem::replace(&mut this.addr, ptr::null_mut()) as *mut u8, Layout::new::<libc::sockaddr_storage>());
-        dealloc(mem::replace(&mut this.len, ptr::null_mut()) as *mut u8, Layout::new::<libc::socklen_t>());
+        Pin::get_unchecked_mut(self).addr.take();
     }
 
     fn ring(self: Pin<&mut Self>) -> Pin<&mut Ring<D>> {
         unsafe { Pin::map_unchecked_mut(self, |this| &mut this.ring) }
+    }
+
+    fn split(self: Pin<&mut Self>) -> (Pin<&mut Ring<D>>, &mut iou::sqe::SockAddrStorage) {
+        unsafe {
+            let this = Pin::get_unchecked_mut(self);
+            if this.addr.is_none() {
+                this.addr = Some(Box::new(iou::sqe::SockAddrStorage::uninit()));
+            }
+            (Pin::new_unchecked(&mut this.ring), &mut **this.addr.as_mut().unwrap())
+        }
     }
 }
 
@@ -141,24 +120,57 @@ impl<D: Drive + Clone> TcpListener<D> {
         Incoming { accept: self.accept_pinned() }
     }
 
+    pub fn accept_no_addr(&mut self) -> AcceptNoAddr<'_, D> where D: Unpin {
+        Pin::new(self).accept_no_addr_pinned()
+    }
+
+    pub fn accept_no_addr_pinned(self: Pin<&mut Self>) -> AcceptNoAddr<'_, D> {
+        AcceptNoAddr { socket: self }
+    }
+
+    pub fn incoming_no_addr(&mut self) -> IncomingNoAddr<'_, D> where D: Unpin {
+        Pin::new(self).incoming_no_addr_pinned()
+    }
+
+    pub fn incoming_no_addr_pinned(self: Pin<&mut Self>) -> IncomingNoAddr<'_, D> {
+        IncomingNoAddr { accept: self.accept_no_addr_pinned() }
+    }
+
     pub fn poll_accept(mut self: Pin<&mut Self>, ctx: &mut Context<'_>)
         -> Poll<io::Result<(TcpStream<D>, SocketAddr)>>
     {
         self.as_mut().guard_op(Op::Accept);
         let fd = self.fd;
-        let flags = 0;
-        let (addr, addrlen) = self.as_mut().addr();
-        let fd = ready!(self.as_mut().ring().poll(ctx, true, |sqe| unsafe {
-            uring_sys::io_uring_prep_accept(sqe.raw_mut(), fd, addr, addrlen, flags);
+        let (ring, addr) = self.as_mut().split();
+        let fd = ready!(ring.poll(ctx, true, 1, |sqs| unsafe {
+            let mut sqe = sqs.single().unwrap();
+            sqe.prep_accept(fd, Some(addr), SockFlag::empty());
+            sqe
         }))? as RawFd;
         let addr = unsafe {
-            let result = addr_from_c(&*addr, *addrlen as usize);
+            let result = addr.as_socket_addr();
             self.as_mut().drop_addr();
-            result?
+            match result? {
+                iou::sqe::SockAddr::Inet(addr) => addr.to_std(),
+                addr => panic!("TcpListener addr cannot be {:?}", addr.family()),
+            }
         };
+
         Poll::Ready(Ok((TcpStream::from_fd(fd, self.ring().clone()), addr)))
     }
 
+    pub fn poll_accept_no_addr(mut self: Pin<&mut Self>, ctx: &mut Context<'_>)
+        -> Poll<io::Result<TcpStream<D>>>
+    {
+        self.as_mut().guard_op(Op::Accept);
+        let fd = self.fd;
+        let fd = ready!(self.as_mut().ring().poll(ctx, true, 1, |sqs| unsafe {
+            let mut sqe = sqs.single().unwrap();
+            sqe.prep_accept(fd, None, SockFlag::empty());
+            sqe
+        }))? as RawFd;
+        Poll::Ready(Ok(TcpStream::from_fd(fd, self.ring().clone())))
+    }
 }
 
 impl<D: Drive> Drop for TcpListener<D> {
@@ -174,14 +186,23 @@ pub struct Accept<'a, D: Drive> {
     socket: Pin<&'a mut TcpListener<D>>,
 }
 
-impl<'a, D: Drive> Accept<'a, D> {
-}
-
 impl<'a, D: Drive + Clone> Future for Accept<'a, D> {
     type Output = io::Result<(TcpStream<D>, SocketAddr)>;
 
     fn poll(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<Self::Output> {
         self.socket.as_mut().poll_accept(ctx)
+    }
+}
+
+pub struct AcceptNoAddr<'a, D: Drive> {
+    socket: Pin<&'a mut TcpListener<D>>,
+}
+
+impl<'a, D: Drive + Clone> Future for AcceptNoAddr<'a, D> {
+    type Output = io::Result<TcpStream<D>>;
+
+    fn poll(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<Self::Output> {
+        self.socket.as_mut().poll_accept_no_addr(ctx)
     }
 }
 
@@ -204,6 +225,24 @@ impl<'a, D: Drive + Clone> Stream for Incoming<'a, D> {
     }
 }
 
+pub struct IncomingNoAddr<'a, D: Drive> {
+    accept: AcceptNoAddr<'a, D>,
+}
+
+impl<'a, D: Drive> IncomingNoAddr<'a, D> {
+    fn inner(self: Pin<&mut Self>) -> Pin<&mut AcceptNoAddr<'a, D>> {
+        unsafe { Pin::map_unchecked_mut(self, |this| &mut this.accept) }
+    }
+}
+
+impl<'a, D: Drive + Clone> Stream for IncomingNoAddr<'a, D> {
+    type Item = io::Result<TcpStream<D>>;
+
+    fn poll_next(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let next = ready!(self.inner().poll(ctx));
+        Poll::Ready(Some(next))
+    }
+}
 
 pub struct Close<'a, D: Drive> {
     socket: Pin<&'a mut TcpListener<D>>,
@@ -215,8 +254,10 @@ impl<'a, D: Drive> Future for Close<'a, D> {
     fn poll(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<io::Result<()>> {
         self.socket.as_mut().guard_op(Op::Close);
         let fd = self.socket.fd;
-        ready!(self.socket.as_mut().ring().poll(ctx, true, |sqe| unsafe {
-            uring_sys::io_uring_prep_close(sqe.raw_mut(), fd);
+        ready!(self.socket.as_mut().ring().poll(ctx, true, 1, |sqs| unsafe {
+            let mut sqe = sqs.single().unwrap();
+            sqe.prep_close(fd);
+            sqe
         }))?;
         Poll::Ready(Ok(()))
     }

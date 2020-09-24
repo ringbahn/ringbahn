@@ -2,6 +2,7 @@ pub mod fs;
 pub mod drive;
 pub mod event;
 pub mod net;
+pub mod unix;
 
 mod buf;
 mod cancellation;

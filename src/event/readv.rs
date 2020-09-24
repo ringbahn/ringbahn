@@ -1,22 +1,17 @@
 use std::io::IoSliceMut; 
-use std::os::unix::io::AsRawFd;
+use std::os::unix::io::RawFd;
 use std::mem::ManuallyDrop;
-use std::marker::Unpin;
 
-use super::{Event, Cancellation};
+use super::{Event, SQE, SQEs, Cancellation};
 
 /// A `readv` event.
-pub struct ReadV<'a, T> {
-    pub io: &'a T,
+pub struct ReadVectored {
+    pub fd: RawFd,
     pub bufs: Vec<Box<[u8]>>,
-    pub offset: usize
+    pub offset: u64,
 }
 
-impl<'a, T: AsRawFd + Unpin> ReadV<'a, T> {
-    pub fn new(io: &'a T, bufs: Vec<Box<[u8]>>, offset: usize) -> ReadV<T> {
-        ReadV { io, bufs, offset }
-    }
-
+impl ReadVectored {
     fn as_iovecs(buffers: &mut [Box<[u8]>]) -> &mut [IoSliceMut] {
         // Unsafe contract:
         // This pointer cast is defined behaviour because Box<[u8]> (wide pointer)
@@ -36,9 +31,13 @@ impl<'a, T: AsRawFd + Unpin> ReadV<'a, T> {
 }
 
 
-impl<'a, T: AsRawFd + Unpin> Event for ReadV<'a, T> {
-    unsafe fn prepare(&mut self, sqe: &mut iou::SubmissionQueueEvent<'_>) {
-        sqe.prep_read_vectored(self.io.as_raw_fd(), Self::as_iovecs(&mut self.bufs[..]), self.offset);
+impl Event for ReadVectored {
+    fn sqes_needed(&self) -> u32 { 1 }
+
+    unsafe fn prepare<'sq>(&mut self, sqs: &mut SQEs<'sq>) -> SQE<'sq> {
+        let mut sqe = sqs.single().unwrap();
+        sqe.prep_read_vectored(self.fd, Self::as_iovecs(&mut self.bufs[..]), self.offset);
+        sqe
     }
 
     unsafe fn cancel(this: &mut ManuallyDrop<Self>) -> Cancellation {

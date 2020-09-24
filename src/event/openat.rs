@@ -4,33 +4,37 @@ use std::os::unix::io::RawFd;
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 
-use super::{Event, Cancellation};
+use iou::sqe::{Mode, OFlag};
+
+use super::{Event, SQE, SQEs, Cancellation};
 
 pub struct OpenAt {
-    path: CString,
-    dfd: RawFd,
-    flags: i32,
-    mode: u32,
+    pub path: CString,
+    pub dir_fd: RawFd,
+    pub flags: OFlag,
+    pub mode: Mode,
 }
 
 impl OpenAt {
-    pub fn new(path: impl AsRef<Path>, dfd: RawFd, flags: i32, mode: u32) -> OpenAt {
-        let path = CString::new(path.as_ref().as_os_str().as_bytes()).expect("invalid path");
-        OpenAt { path, dfd, flags, mode }
+    pub fn without_dir(path: impl AsRef<Path>, flags: OFlag, mode: Mode) -> OpenAt {
+        let path = CString::new(path.as_ref().as_os_str().as_bytes()).unwrap();
+        OpenAt { path, dir_fd: libc::AT_FDCWD, flags, mode }
     }
 }
 
 impl Event for OpenAt {
-    unsafe fn prepare(&mut self, sqe: &mut iou::SubmissionQueueEvent<'_>) {
-        let path = self.path.as_ptr();
-        uring_sys::io_uring_prep_openat(sqe.raw_mut(), self.dfd, path, self.flags, self.mode);
+    fn sqes_needed(&self) -> u32 { 1 }
+
+    unsafe fn prepare<'sq>(&mut self, sqs: &mut SQEs<'sq>) -> SQE<'sq> {
+        let mut sqe = sqs.single().unwrap();
+        sqe.prep_openat(self.dir_fd, &*self.path, self.flags, self.mode);
+        sqe
     }
 
     unsafe fn cancel(this: &mut ManuallyDrop<Self>) -> Cancellation {
-        let path = ManuallyDrop::take(this).path;
-        let mut bytes = ManuallyDrop::new(path.into_bytes_with_nul());
-        let ptr = bytes.as_mut_ptr();
-        let cap = bytes.capacity();
-        Cancellation::buffer(ptr, cap)
+        unsafe fn callback(addr: *mut (), _: usize) {
+            drop(CString::from_raw(addr as *mut _));
+        }
+        Cancellation::new(this.path.as_ptr() as *const () as *mut (), 0, callback)
     }
 }
