@@ -1,13 +1,15 @@
 use std::mem::ManuallyDrop;
 use std::os::unix::io::RawFd;
 
+use iou::registrar::UringFd;
+
 use super::{Event, SQE, SQEs, Cancellation};
 
-pub struct Close {
-    pub fd: RawFd,
+pub struct Close<FD = RawFd> {
+    pub fd: FD,
 }
 
-impl Event for Close {
+impl<FD: UringFd + Copy> Event for Close<FD> {
     fn sqes_needed(&self) -> u32 { 1 }
 
     unsafe fn prepare<'sq>(&mut self, sqs: &mut SQEs<'sq>) -> SQE<'sq> {

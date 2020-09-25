@@ -1,16 +1,17 @@
 use std::mem::ManuallyDrop;
 use std::os::unix::io::RawFd;
 
+use iou::registrar::UringFd;
 use iou::sqe::FsyncFlags;
 
 use super::{Event, SQE, SQEs, Cancellation};
 
-pub struct Fsync {
-    pub fd: RawFd,
+pub struct Fsync<FD = RawFd> {
+    pub fd: FD,
     pub flags: FsyncFlags,
 }
 
-impl Event for Fsync {
+impl<FD: UringFd + Copy> Event for Fsync<FD> {
     fn sqes_needed(&self) -> u32 { 1 }
 
     unsafe fn prepare<'sq>(&mut self, sqs: &mut SQEs<'sq>) -> SQE<'sq> {

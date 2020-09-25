@@ -2,16 +2,18 @@ use std::io::IoSliceMut;
 use std::os::unix::io::RawFd;
 use std::mem::ManuallyDrop;
 
+use iou::registrar::UringFd;
+
 use super::{Event, SQE, SQEs, Cancellation};
 
 /// A `readv` event.
-pub struct ReadVectored {
-    pub fd: RawFd,
+pub struct ReadVectored<FD = RawFd> {
+    pub fd: FD,
     pub bufs: Box<[Box<[u8]>]>,
     pub offset: u64,
 }
 
-impl ReadVectored {
+impl<FD> ReadVectored<FD> {
     fn as_iovecs(buffers: &mut [Box<[u8]>]) -> &mut [IoSliceMut] {
         // Unsafe contract:
         // This pointer cast is defined behaviour because Box<[u8]> (wide pointer)
@@ -31,7 +33,7 @@ impl ReadVectored {
 }
 
 
-impl Event for ReadVectored {
+impl<FD: UringFd + Copy> Event for ReadVectored<FD> {
     fn sqes_needed(&self) -> u32 { 1 }
 
     unsafe fn prepare<'sq>(&mut self, sqs: &mut SQEs<'sq>) -> SQE<'sq> {

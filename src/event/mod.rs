@@ -35,14 +35,14 @@ pub use files_update::FilesUpdate;
 pub use fsync::Fsync;
 pub use openat::OpenAt;
 pub use provide_buffers::{ProvideBuffers, RemoveBuffers};
-pub use read::Read;
+pub use read::{Read, ReadFixed};
 pub use readv::ReadVectored;
 pub use recv::Recv;
 pub use send::Send;
 pub use splice::Splice;
 pub use statx::Statx;
 pub use timeout::{Timeout, StaticTimeout};
-pub use write::Write;
+pub use write::{Write, WriteFixed};
 pub use writev::WriteVectored;
 
 /// An IO event that can be scheduled on an io-uring driver.
