@@ -1,4 +1,4 @@
-use std::any::{Any, TypeId};.
+use std::any::{Any, TypeId};
 use std::mem::ManuallyDrop;
 
 use crate::Cancellation;
