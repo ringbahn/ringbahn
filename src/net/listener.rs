@@ -143,7 +143,7 @@ impl<D: Drive + Clone> TcpListener<D> {
         self.as_mut().guard_op(Op::Accept);
         let fd = self.fd;
         let (ring, addr) = self.as_mut().split();
-        let fd = ready!(ring.poll(ctx, true, 1, |sqs| unsafe {
+        let fd = ready!(ring.poll(ctx, 1, |sqs| unsafe {
             let mut sqe = sqs.single().unwrap();
             sqe.prep_accept(fd, Some(addr), SockFlag::empty());
             sqe
@@ -165,7 +165,7 @@ impl<D: Drive + Clone> TcpListener<D> {
     {
         self.as_mut().guard_op(Op::Accept);
         let fd = self.fd;
-        let fd = ready!(self.as_mut().ring().poll(ctx, true, 1, |sqs| unsafe {
+        let fd = ready!(self.as_mut().ring().poll(ctx, 1, |sqs| unsafe {
             let mut sqe = sqs.single().unwrap();
             sqe.prep_accept(fd, None, SockFlag::empty());
             sqe
@@ -256,7 +256,7 @@ impl<'a, D: Drive> Future for Close<'a, D> {
     fn poll(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<io::Result<()>> {
         self.socket.as_mut().guard_op(Op::Close);
         let fd = self.socket.fd;
-        ready!(self.socket.as_mut().ring().poll(ctx, true, 1, |sqs| unsafe {
+        ready!(self.socket.as_mut().ring().poll(ctx, 1, |sqs| unsafe {
             let mut sqe = sqs.single().unwrap();
             sqe.prep_close(fd);
             sqe

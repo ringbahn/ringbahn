@@ -64,14 +64,8 @@ impl Drive for DemoDriver<'_> {
     fn poll_submit(
         self: Pin<&mut Self>,
         _: &mut Context<'_>,
-        eager: bool,
     ) -> Poll<io::Result<u32>> {
-        let result = if eager {
-            self.sq.skip_queue().lock().submit()
-        } else {
-            Ok(0)
-        };
-        Poll::Ready(result)
+        Poll::Ready(self.sq.skip_queue().lock().submit())
     }
 }
 

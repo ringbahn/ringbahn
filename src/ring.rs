@@ -74,21 +74,20 @@ impl<D: Drive> Ring<D> {
     pub fn poll(
         mut self: Pin<&mut Self>,
         ctx: &mut Context<'_>,
-        is_eager: bool,
         count: u32,
         prepare: impl for<'sq> FnOnce(&mut SQEs<'sq>) -> SQE<'sq>,
     ) -> Poll<io::Result<u32>> {
         match self.state {
             Inert | Cancelled(_) => {
                 ready!(self.as_mut().poll_prepare(ctx, count, prepare));
-                ready!(self.as_mut().poll_submit(ctx, is_eager));
+                ready!(self.as_mut().poll_submit(ctx));
                 Poll::Pending
             }
             Prepared(_)             => {
                 match self.as_mut().poll_complete(ctx) {
                     ready @ Poll::Ready(..) => ready,
                     Poll::Pending           => {
-                        ready!(self.poll_submit(ctx, is_eager));
+                        ready!(self.poll_submit(ctx));
                         Poll::Pending
                     }
                 }
@@ -129,10 +128,10 @@ impl<D: Drive> Ring<D> {
     }
 
     #[inline(always)]
-    fn poll_submit(self: Pin<&mut Self>, ctx: &mut Context<'_>, is_eager: bool) -> Poll<()> {
+    fn poll_submit(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<()> {
         let (driver, state) = self.split();
         // TODO figure out how to handle this result
-        let _ = ready!(driver.poll_submit(ctx, is_eager));
+        let _ = ready!(driver.poll_submit(ctx));
         if let Prepared(completion) | Submitted(completion) = mem::replace(state, Lost) {
             *state = Submitted(completion);
             Poll::Ready(())
