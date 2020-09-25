@@ -72,9 +72,6 @@ pub trait Event {
     /// - Interest in the event is cancelled, in which case `Event::cancel` will be called and the
     ///   event's destructor will not run.
     ///
-    /// The only method that will be called on this event in the meantime is the `is_eager` method.
-    /// Users cannot assume that the is_eager event will not be called.
-    ///
     /// In essence implementing prepare, users can write code ass if any heap addresses passed to
     /// the  kernel have passed ownership of that data to the kernel for the time that the event is
     /// completed.
@@ -95,9 +92,4 @@ pub trait Event {
     /// The cancellation can take ownership from the event of any resources owned by the kernel,
     /// and then clean up those resources when the kernel completes the event.
     unsafe fn cancel(this: &mut ManuallyDrop<Self>) -> Cancellation;
-
-    /// Hint if this event is eager.
-    fn is_eager(&self) -> bool {
-        true
-    }
 }

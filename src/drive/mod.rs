@@ -59,12 +59,12 @@ pub trait Drive {
         prepare: impl FnOnce(SQEs<'_>, &mut Context<'cx>) -> Completion<'cx>,
     ) -> Poll<Completion<'cx>>;
 
-    /// Submit all of the events on the submission queue.
+    /// Suggest to submit all of the events on the submission queue.
     ///
-    /// The implementer is responsible for determining how and when these events are submitted to
-    /// the kernel to complete. The `eager` argument is a hint indicating whether the caller would
-    /// prefer to see events submitted eagerly, but the implementation is not obligated to follow
-    /// this hint.
+    /// The implementer is responsible for determining how and when events are submitted to the
+    /// kernel to complete. It is valid for this function to do nothing at all; this function just
+    /// informs the driver that the user program is waiting for its prepared events to be
+    /// submitted and completed.
     ///
     /// If the implementation is not ready to submit, but wants to be called again to try later, it
     /// can return `Poll::Pending`. If it does, it must register a waker to wake the task when it
@@ -72,11 +72,10 @@ pub trait Drive {
     ///
     /// It is also valid not to submit an event but not to register a waker to try again, in which
     /// case the appropriate response would be to return `Ok(0)`. This indicates to the caller that
-    /// the submission step is complete, whether or not actual IO was performed.
+    /// the submission step is complete, whether or not actual IO was performed by the driver.
     fn poll_submit(
         self: Pin<&mut Self>,
         ctx: &mut Context<'_>,
-        eager: bool,
     ) -> Poll<io::Result<u32>>;
 
     fn submit<E: Event>(self, event: E) -> Submission<E, Self> where Self: Sized {

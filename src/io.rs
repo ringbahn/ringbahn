@@ -89,7 +89,7 @@ impl<D: Drive> Future for Print<D> {
         let (mut ring, fd, mut bytes, idx) = self.split();
         if !bytes.is_empty() {
             loop {
-                let written = ready!(ring.as_mut().poll(ctx, true, 1, |sqs| unsafe {
+                let written = ready!(ring.as_mut().poll(ctx, 1, |sqs| unsafe {
                     let mut sqe = sqs.single().unwrap();
                     sqe.prep_write(fd, bytes, 0);
                     sqe
