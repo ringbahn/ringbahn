@@ -20,9 +20,6 @@ impl Event for Connect {
     }
 
     unsafe fn cancel(this: &mut ManuallyDrop<Self>) -> Cancellation {
-        unsafe fn callback(addr: *mut (), _: usize) {
-            drop(Box::from_raw(addr as *mut SockAddr));
-        }
-        Cancellation::new(&mut *this.addr as *mut SockAddr as *mut (), 0, callback)
+        Cancellation::object(ManuallyDrop::take(this).addr)
     }
 }

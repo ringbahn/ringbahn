@@ -10,12 +10,12 @@ const ASSERT: &[u8] = b"But this formidable power of death -";
 #[test]
 fn readv_file() {
     let file = File::open("props.txt").unwrap();
-    let vec1 = Box::new([0; 4]);
-    let vec2 = Box::new([0; 5]);
-    let vec3 = Box::new([0; 10]);
+    let vec1: Box<[u8]> = Box::new([0; 4]);
+    let vec2: Box<[u8]> = Box::new([0; 5]);
+    let vec3: Box<[u8]> = Box::new([0; 10]);
     let readv = ReadVectored {
         fd: file.as_raw_fd(),
-        bufs: vec![vec1, vec2, vec3],
+        bufs: vec![vec1, vec2, vec3].into_boxed_slice(),
         offset: 0,
     };
     let (readv, result) = futures::executor::block_on(Submission::new(readv, demo::driver()));

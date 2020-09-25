@@ -1,3 +1,6 @@
+use std::any::Any;
+use std::ffi::CString;
+use std::mem;
 use std::ptr;
 
 /// A cancellation callback to clean up resources when IO gets cancelled.
@@ -13,6 +16,45 @@ pub struct Cancellation {
 }
 
 impl Cancellation {
+    pub fn object<T>(object: Box<T>) -> Cancellation {
+        unsafe fn callback<T>(object: *mut (), _: usize) {
+            drop(Box::from_raw(object as *mut T))
+        }
+        unsafe { Cancellation::new(Box::into_raw(object) as *mut (), 0, callback::<T>) }
+    }
+
+    pub fn dyn_object(object: Box<dyn Any + Send + Sync>) -> Cancellation {
+        #[repr(C)] struct TraitObject {
+            data: *mut (),
+            vtable: *mut (),
+        }
+
+        unsafe fn callback(data: *mut (), metadata: usize) {
+            let obj = TraitObject { data, vtable: metadata as *mut () };
+            drop(mem::transmute::<TraitObject, Box<dyn Any + Send + Sync>>(obj));
+        }
+
+        unsafe {
+            let obj = mem::transmute::<Box<dyn Any + Send + Sync>, TraitObject>(object);
+            Cancellation::new(obj.data, obj.vtable as usize, callback)
+        }
+    }
+
+    pub fn buffer<T>(buffer: Box<[T]>) -> Cancellation {
+        unsafe fn callback<T>(data: *mut (), len: usize) {
+            drop::<Box<[T]>>(Vec::<T>::from_raw_parts(data as *mut T, len, len).into_boxed_slice())
+        }
+        let len = buffer.len();
+        unsafe { Cancellation::new(Box::into_raw(buffer) as *mut (), len, callback::<T>) }
+    }
+
+    pub fn cstring(cstring: CString) -> Cancellation {
+        unsafe fn callback(addr: *mut (), _: usize) {
+            drop(CString::from_raw(addr as *mut _));
+        }
+        unsafe { Cancellation::new(cstring.as_ptr() as *const () as *mut (), 0, callback) }
+    }
+
     /// Construct a new cancellation callback to hold resources until the event concludes. The
     /// `drop` argument will be called receive the `data` and `metadata` fields when the
     /// cancellation is dropped.
@@ -35,15 +77,6 @@ impl Cancellation {
     pub fn null() -> Cancellation {
         unsafe fn drop(_: *mut (), _: usize) { }
         Cancellation { data: ptr::null_mut(), metadata: 0, drop }
-    }
-
-
-    pub(crate) unsafe fn buffer(data: *mut u8, len: usize) -> Cancellation {
-        unsafe fn drop(data: *mut (), len: usize) {
-            std::mem::drop(Vec::from_raw_parts(data as *mut u8, len, len))
-        }
-
-        Cancellation::new(data as *mut (), len, drop)
     }
 }
 

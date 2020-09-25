@@ -21,9 +21,7 @@ impl Event for ProvideBuffers {
     }
 
     unsafe fn cancel(this: &mut ManuallyDrop<Self>) -> Cancellation {
-        let mut buf: ManuallyDrop<Box<[u8]>> = ManuallyDrop::new(ManuallyDrop::take(this).bufs);
-        let cap = buf.len();
-        Cancellation::buffer(buf.as_mut_ptr(), cap)
+        Cancellation::buffer(ManuallyDrop::take(this).bufs)
     }
 }
 
