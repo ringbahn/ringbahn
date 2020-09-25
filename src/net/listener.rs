@@ -72,15 +72,7 @@ impl<D: Drive> TcpListener<D> {
 
     fn cancel(&mut self) {
         let cancellation = match self.active {
-            Op::Accept => {
-                unsafe fn callback(addr: *mut (), _: usize) {
-                    drop(Box::from_raw(addr as *mut iou::sqe::SockAddrStorage))
-                }
-                unsafe {
-                    let addr: &mut iou::sqe::SockAddrStorage = &mut **self.addr.as_mut().unwrap();
-                    Cancellation::new(addr as *mut iou::sqe::SockAddrStorage as *mut (), 0, callback)
-                }
-            }
+            Op::Accept  => self.addr.take().map_or_else(Cancellation::null, Cancellation::object),
             Op::Close   => Cancellation::null(),
             Op::Closed  => return,
             Op::Nothing => return,

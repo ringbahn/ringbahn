@@ -1,5 +1,4 @@
-use std::any::{Any, TypeId};
-use std::mem::ManuallyDrop;
+use std::any::Any;
 
 use crate::Cancellation;
 
@@ -16,7 +15,7 @@ impl Data {
         self.inner.as_mut().unwrap().bytes_mut().unwrap()
     }
 
-    pub fn alloc<T: UringData>(&mut self, data: T) -> &mut T  {
+    pub fn alloc<T: Send + Sync + 'static>(&mut self, data: T) -> &mut T  {
         if self.inner.is_none() {
             self.inner = Some(Inner::Object(Box::new(data)));
         }
@@ -34,13 +33,13 @@ impl Data {
 
 enum Inner {
     Buffer(Box<[u8]>),
-    Object(Box<dyn UringData>),
+    Object(Box<dyn Any + Send + Sync>),
 }
 
 impl Inner {
-    fn downcast<T: UringData>(&mut self) -> Option<&mut T> {
+    fn downcast<T: Any + Send + Sync>(&mut self) -> Option<&mut T> {
         match self {
-            Inner::Object(object)   => object.downcast(),
+            Inner::Object(object)   => object.downcast_mut(),
             Inner::Buffer(_)        => None,
         }
     }
@@ -61,40 +60,8 @@ impl Inner {
 
     fn cancellation(self) -> Cancellation {
         match self {
-            Inner::Buffer(bytes)    => {
-                let mut bytes = ManuallyDrop::new(bytes);
-                unsafe { Cancellation::buffer(bytes.as_mut_ptr(), bytes.len()) }
-            }
-            Inner::Object(object)   => {
-                let mut object = ManuallyDrop::new(object);
-                unsafe { object.cancellation() }
-            }
+            Inner::Buffer(bytes)    => Cancellation::buffer(bytes),
+            Inner::Object(object)   => Cancellation::dyn_object(object),
         }
-    }
-}
-
-pub trait UringData: Send + Sync + Any {
-    /// # Safety
-    ///
-    /// This method must logically take ownership of `self`.
-    unsafe fn cancellation(&mut self) -> Cancellation;
-}
-
-impl dyn UringData + 'static {
-    fn downcast<T: UringData>(&mut self) -> Option<&mut T> {
-        if Any::type_id(self) == TypeId::of::<T>() {
-            unsafe { Some(&mut *(self as *mut dyn UringData as *mut T)) }
-        } else {
-            None
-        }
-    }
-}
-
-impl UringData for libc::statx {
-    unsafe fn cancellation(&mut self) -> Cancellation {
-        unsafe fn callback(ptr: *mut (), _: usize) {
-            drop(Box::from_raw(ptr as *mut libc::statx));
-        }
-        Cancellation::new(self as *mut libc::statx as *mut (), 0, callback)
     }
 }

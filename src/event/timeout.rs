@@ -59,10 +59,7 @@ impl Event for Timeout {
     }
 
     unsafe fn cancel(this: &mut ManuallyDrop<Self>) -> Cancellation {
-        unsafe fn callback(ts: *mut (), _: usize) {
-            drop(Box::from_raw(ts as *mut uring_sys::__kernel_timespec))
-        }
-        Cancellation::new(&mut *this.ts as *mut uring_sys::__kernel_timespec as *mut (), 0, callback)
+        Cancellation::object(ManuallyDrop::take(this).ts)
     }
 }
 

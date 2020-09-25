@@ -32,9 +32,6 @@ impl Event for OpenAt {
     }
 
     unsafe fn cancel(this: &mut ManuallyDrop<Self>) -> Cancellation {
-        unsafe fn callback(addr: *mut (), _: usize) {
-            drop(CString::from_raw(addr as *mut _));
-        }
-        Cancellation::new(this.path.as_ptr() as *const () as *mut (), 0, callback)
+        Cancellation::cstring(ManuallyDrop::take(this).path)
     }
 }

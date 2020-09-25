@@ -1,6 +1,5 @@
 use std::mem::ManuallyDrop;
 use std::os::unix::io::RawFd;
-use std::ptr;
 
 use iou::sqe::{SockFlag, SockAddrStorage};
 
@@ -22,14 +21,6 @@ impl Event for Accept {
     }
 
     unsafe fn cancel(this: &mut ManuallyDrop<Self>) -> Cancellation {
-        unsafe fn callback(addr: *mut (), _: usize) {
-            if addr != ptr::null_mut() {
-                drop(Box::from_raw(addr as *mut SockAddrStorage));
-            }
-        }
-        let addr: *mut SockAddrStorage = this.addr.as_mut().map_or(ptr::null_mut(), |addr| {
-            &mut **addr
-        });
-        Cancellation::new(addr as *mut (), 0, callback)
+        this.addr.take().map_or_else(Cancellation::null, Cancellation::object)
     }
 }

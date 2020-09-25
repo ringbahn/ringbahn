@@ -15,7 +15,7 @@ fn writev_file() {
     let vec3 = &ASSERT[9..];
     let writev = WriteVectored {
         fd: file.as_raw_fd(),
-        bufs: vec![vec1.into(), vec2.into(), vec3.into()],
+        bufs: vec![vec1.into(), vec2.into(), vec3.into()].into(),
         offset: 0,
     };
     let (_, result) = futures::executor::block_on(Submission::new(writev, demo::driver()));
