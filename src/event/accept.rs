@@ -2,16 +2,17 @@ use std::mem::ManuallyDrop;
 use std::os::unix::io::RawFd;
 
 use iou::sqe::{SockFlag, SockAddrStorage};
+use iou::registrar::UringFd;
 
 use super::{Event, SQE, SQEs, Cancellation};
 
-pub struct Accept {
+pub struct Accept<FD = RawFd> {
     pub addr: Option<Box<SockAddrStorage>>,
-    pub fd: RawFd,
+    pub fd: FD,
     pub flags: SockFlag,
 }
 
-impl Event for Accept {
+impl<FD: UringFd + Copy> Event for Accept<FD> {
     fn sqes_needed(&self) -> u32 { 1 }
 
     unsafe fn prepare<'sq>(&mut self, sqs: &mut SQEs<'sq>) -> SQE<'sq> {

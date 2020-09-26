@@ -5,11 +5,12 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 
 use iou::sqe::{StatxFlags, StatxMode};
+use iou::registrar::UringFd;
 
 use super::{Event, SQE, SQEs, Cancellation};
 
-pub struct Statx {
-    pub dir_fd: RawFd,
+pub struct Statx<FD = RawFd> {
+    pub dir_fd: FD,
     pub path: CString,
     pub flags: StatxFlags,
     pub mask: StatxMode,
@@ -24,7 +25,19 @@ impl Statx {
     }
 }
 
-impl Event for Statx {
+impl<FD: UringFd> Statx<FD> {
+    pub fn without_path(fd: FD, mut flags: StatxFlags, mask: StatxMode) -> Statx<FD> {
+        unsafe {
+            // TODO don't allocate? Use Cow? Use NULL?
+            let path = CString::new("").unwrap();
+            let statx = Box::new(mem::zeroed());
+            flags.insert(StatxFlags::AT_EMPTY_PATH);
+            Statx { dir_fd: fd, path, flags, mask, statx }
+        }
+    }
+}
+
+impl<FD: UringFd + Copy> Event for Statx<FD> {
     fn sqes_needed(&self) -> u32 { 1 }
 
     unsafe fn prepare<'sq>(&mut self, sqs: &mut SQEs<'sq>) -> SQE<'sq> {

@@ -3,6 +3,7 @@
 use std::future::Future;
 use std::io;
 use std::pin::Pin;
+use std::sync::Once;
 use std::task::{Poll, Context};
 use std::thread;
 
@@ -19,7 +20,11 @@ use super::{Drive, Completion};
 
 use iou::*;
 
-static SQ: Lazy<AccessQueue<Mutex<SubmissionQueue<'static>>>> = Lazy::new(init_sq);
+static QUEUES: Lazy<(
+    AccessQueue<Mutex<SubmissionQueue<'static>>>,
+    Mutex<CompletionQueue<'static>>,
+    Registrar<'static>
+)> = Lazy::new(init);
 
 /// The driver handle
 pub struct DemoDriver<'a> {
@@ -65,44 +70,62 @@ impl Drive for DemoDriver<'_> {
         self: Pin<&mut Self>,
         _: &mut Context<'_>,
     ) -> Poll<io::Result<u32>> {
+        start_completion_thread();
         Poll::Ready(self.sq.skip_queue().lock().submit())
     }
 }
 
 /// Construct a demo driver handle
 pub fn driver() -> DemoDriver<'static> {
-    DemoDriver { sq: SQ.access() }
+    DemoDriver { sq: QUEUES.0.access() }
 }
 
-fn init_sq() -> AccessQueue<Mutex<SubmissionQueue<'static>>> {
+/// Access the registrar
+///
+/// This will return `None` if events have already been submitted to the driver. The Demo Driver
+/// currently only allows registering IO objects prior to submitting IO.
+pub fn registrar() -> Option<&'static Registrar<'static>> {
+    if !STARTED_COMPLETION_THREAD.is_completed() {
+        Some(&QUEUES.2)
+    } else {
+        None
+    }
+
+}
+
+fn init() -> (AccessQueue<Mutex<SubmissionQueue<'static>>>, Mutex<CompletionQueue<'static>>, Registrar<'static>) {
     unsafe {
         use std::mem::MaybeUninit;
         static mut RING: MaybeUninit<IoUring> = MaybeUninit::uninit();
         RING = MaybeUninit::new(IoUring::new(SQ_ENTRIES).expect("TODO handle io_uring_init failure"));
-        let (sq, cq, _) = (&mut *RING.as_mut_ptr()).queues();
-        thread::spawn(move || complete(cq));
-        AccessQueue::new(Mutex::new(sq), CQ_ENTRIES)
+        let (sq, cq, reg) = (&mut *RING.as_mut_ptr()).queues();
+        (AccessQueue::new(Mutex::new(sq), CQ_ENTRIES), Mutex::new(cq), reg)
     }
 }
 
-fn complete(mut cq: CompletionQueue<'static>) {
-    while let Ok(cqe) = cq.wait_for_cqe() {
-        let mut ready = cq.ready() as usize + 1;
-        SQ.release(ready);
+static STARTED_COMPLETION_THREAD: Once = Once::new();
 
-        super::complete(cqe);
-        ready -= 1;
-
-        while let Some(cqe) = cq.peek_for_cqe() {
-            if ready == 0 {
-                ready = cq.ready() as usize + 1;
-                SQ.release(ready);
-            }
+fn start_completion_thread() {
+    STARTED_COMPLETION_THREAD.call_once(|| { thread::spawn(move || {
+        let mut cq = QUEUES.1.lock();
+        while let Ok(cqe) = cq.wait_for_cqe() {
+            let mut ready = cq.ready() as usize + 1;
+            QUEUES.0.release(ready);
 
             super::complete(cqe);
             ready -= 1;
-        }
 
-        debug_assert!(ready == 0);
-    }
+            while let Some(cqe) = cq.peek_for_cqe() {
+                if ready == 0 {
+                    ready = cq.ready() as usize + 1;
+                    QUEUES.0.release(ready);
+                }
+
+                super::complete(cqe);
+                ready -= 1;
+            }
+
+            debug_assert!(ready == 0);
+        }
+    }); });
 }
