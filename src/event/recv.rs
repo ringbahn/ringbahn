@@ -2,16 +2,17 @@ use std::os::unix::io::RawFd;
 use std::mem::ManuallyDrop;
 
 use iou::sqe::MsgFlags;
+use iou::registrar::UringFd;
 
 use super::{Event, SQE, SQEs, Cancellation};
 
-pub struct Recv {
-    pub fd: RawFd,
+pub struct Recv<FD = RawFd> {
+    pub fd: FD,
     pub buf: Box<[u8]>,
     pub flags: MsgFlags,
 }
 
-impl Event for Recv {
+impl<FD: UringFd + Copy> Event for Recv<FD> {
     fn sqes_needed(&self) -> u32 { 1 }
 
     unsafe fn prepare<'sq>(&mut self, sqs: &mut SQEs<'sq>) -> SQE<'sq> {
