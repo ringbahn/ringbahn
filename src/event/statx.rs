@@ -28,9 +28,8 @@ impl Statx {
 impl<FD: UringFd> Statx<FD> {
     pub fn without_path(fd: FD, mut flags: StatxFlags, mask: StatxMode) -> Statx<FD> {
         unsafe {
-            static NULL: &[u8] = b"\0";
             // TODO don't allocate? Use Cow? Use NULL?
-            let path = CString::new(NULL).unwrap();
+            let path = CString::new("").unwrap();
             let statx = Box::new(mem::zeroed());
             flags.insert(StatxFlags::AT_EMPTY_PATH);
             Statx { dir_fd: fd, path, flags, mask, statx }
