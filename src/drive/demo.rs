@@ -85,7 +85,7 @@ pub fn driver() -> DemoDriver<'static> {
 /// This will return `None` if events have already been submitted to the driver. The Demo Driver
 /// currently only allows registering IO objects prior to submitting IO.
 pub fn registrar() -> Option<&'static Registrar<'static>> {
-    if STARTED_COMPLETION_THREAD.is_completed() {
+    if !STARTED_COMPLETION_THREAD.is_completed() {
         Some(&QUEUES.2)
     } else {
         None
