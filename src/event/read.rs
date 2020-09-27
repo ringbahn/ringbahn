@@ -1,12 +1,12 @@
-use std::os::unix::io::RawFd;
 use std::mem::ManuallyDrop;
+use std::os::unix::io::RawFd;
 
 use iou::registrar::{UringFd, RegisteredBuf};
 
 use super::{Event, SQE, SQEs, Cancellation};
 
 /// A basic read event.
-pub struct Read<FD = RawFd>{
+pub struct Read<FD = RawFd> {
     pub fd: FD,
     pub buf: Box<[u8]>,
     pub offset: u64,
@@ -21,8 +21,8 @@ impl<FD: UringFd + Copy> Event for Read<FD> {
         sqe
     }
 
-    unsafe fn cancel(this: &mut ManuallyDrop<Self>) -> Cancellation {
-        Cancellation::buffer(ManuallyDrop::take(this).buf)
+    fn cancel(this: ManuallyDrop<Self>) -> Cancellation {
+        Cancellation::from(ManuallyDrop::into_inner(this).buf)
     }
 }
 
@@ -41,7 +41,7 @@ impl<FD: UringFd + Copy> Event for ReadFixed<FD> {
         sqe
     }
 
-    unsafe fn cancel(this: &mut ManuallyDrop<Self>) -> Cancellation {
-        Cancellation::buffer(ManuallyDrop::take(this).buf.into_inner())
+    fn cancel(this: ManuallyDrop<Self>) -> Cancellation {
+        Cancellation::from(ManuallyDrop::into_inner(this).buf)
     }
 }

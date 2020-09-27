@@ -1,10 +1,9 @@
-use std::mem::ManuallyDrop;
 use std::os::unix::io::RawFd;
 
 use iou::registrar::UringFd;
 use iou::sqe::FallocateFlags;
 
-use super::{Event, SQE, SQEs, Cancellation};
+use super::{Event, SQE, SQEs};
 
 pub struct Fallocate<FD = RawFd> {
     pub fd: FD,
@@ -20,9 +19,5 @@ impl<FD: UringFd + Copy> Event for Fallocate<FD> {
         let mut sqe = sqs.single().unwrap();
         sqe.prep_fallocate(self.fd, self.offset, self.size, self.flags);
         sqe
-    }
-
-    unsafe fn cancel(_: &mut ManuallyDrop<Self>) -> Cancellation {
-        Cancellation::null()
     }
 }

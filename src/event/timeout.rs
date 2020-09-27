@@ -28,10 +28,6 @@ impl Event for &'static StaticTimeout {
         sqe.prep_timeout(&self.ts, self.events, self.flags);
         sqe
     }
-
-    unsafe fn cancel(_: &mut ManuallyDrop<Self>) -> Cancellation {
-        Cancellation::null()
-    }
 }
 
 pub struct Timeout {
@@ -58,8 +54,8 @@ impl Event for Timeout {
         sqe
     }
 
-    unsafe fn cancel(this: &mut ManuallyDrop<Self>) -> Cancellation {
-        Cancellation::object(ManuallyDrop::take(this).ts)
+    fn cancel(this: ManuallyDrop<Self>) -> Cancellation {
+        Cancellation::from(ManuallyDrop::into_inner(this).ts)
     }
 }
 

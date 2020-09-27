@@ -27,7 +27,7 @@ impl Data {
     }
 
     pub fn cancellation(&mut self) -> Cancellation {
-        self.inner.take().map_or_else(Cancellation::null, Inner::cancellation)
+        Cancellation::from(self.inner.take())
     }
 }
 
@@ -57,11 +57,13 @@ impl Inner {
             Inner::Object(_)        => None,
         }
     }
+}
 
-    fn cancellation(self) -> Cancellation {
-        match self {
-            Inner::Buffer(bytes)    => Cancellation::buffer(bytes),
-            Inner::Object(object)   => Cancellation::dyn_object(object),
+impl From<Inner> for Cancellation {
+    fn from(inner: Inner) -> Cancellation {
+        match inner {
+            Inner::Buffer(bytes)    => Cancellation::from(bytes),
+            Inner::Object(object)   => Cancellation::from(object),
         }
     }
 }

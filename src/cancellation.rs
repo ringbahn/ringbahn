@@ -15,68 +15,112 @@ pub struct Cancellation {
     drop: unsafe fn(*mut (), usize),
 }
 
+pub unsafe trait Cancel {
+    fn into_raw(self) -> (*mut (), usize);
+    unsafe fn drop_raw(data: *mut (), metadata: usize);
+}
+
+unsafe impl<T> Cancel for Box<T> {
+    fn into_raw(self) -> (*mut (), usize) {
+        (Box::into_raw(self) as *mut (), 0)
+    }
+
+    unsafe fn drop_raw(data: *mut (), _: usize) {
+        drop(Box::from_raw(data as *mut T));
+    }
+}
+
+unsafe impl<T> Cancel for Box<[T]> {
+    fn into_raw(self) -> (*mut (), usize) {
+        let len = self.len();
+        (Box::into_raw(self) as *mut (), len)
+    }
+
+    unsafe fn drop_raw(data: *mut (), len: usize) {
+        drop(Vec::from_raw_parts(data as *mut T, len, len).into_boxed_slice());
+    }
+}
+
+#[repr(C)]
+struct TraitObject {
+    data: *mut (),
+    vtable: *mut (),
+}
+
+unsafe impl Cancel for Box<dyn Any + Send + Sync> {
+    fn into_raw(self) -> (*mut (), usize) {
+        let obj = unsafe { mem::transmute::<Self, TraitObject>(self) };
+        (obj.data, obj.vtable as usize)
+    }
+
+    unsafe fn drop_raw(data: *mut (), metadata: usize) {
+        let obj = TraitObject { data, vtable: metadata as *mut () };
+        drop(mem::transmute::<TraitObject, Self>(obj));
+    }
+}
+
+unsafe impl Cancel for iou::registrar::RegisteredBuf {
+    fn into_raw(self) -> (*mut (), usize) {
+        self.into_inner().into_raw()
+    }
+
+    unsafe fn drop_raw(data: *mut (), metadata: usize) {
+        Box::<[u8]>::drop_raw(data, metadata)
+    }
+}
+
+unsafe impl Cancel for CString {
+    fn into_raw(self) -> (*mut (), usize) {
+        (self.into_raw() as *mut (), 0)
+    }
+
+    unsafe fn drop_raw(data: *mut (), _: usize) {
+        drop(CString::from_raw(data as *mut libc::c_char));
+    }
+}
+
+unsafe impl Cancel for () {
+    fn into_raw(self) -> (*mut (), usize) {
+        (ptr::null_mut(), 0)
+    }
+
+    unsafe fn drop_raw(_: *mut (), _: usize) { }
+}
+
+pub unsafe trait CancelNarrow: Cancel { }
+
+unsafe impl<T> CancelNarrow for Box<T> { }
+unsafe impl CancelNarrow for CString { }
+
+unsafe impl<T: CancelNarrow, U: CancelNarrow> Cancel for (T, U) {
+    fn into_raw(self) -> (*mut (), usize) {
+        let left = self.0.into_raw().0;
+        let right = self.1.into_raw().0;
+        (left, right as usize)
+    }
+
+    unsafe fn drop_raw(data: *mut (), metadata: usize) {
+        T::drop_raw(data, 0);
+        U::drop_raw(metadata as *mut (), 0);
+    }
+}
+
 impl Cancellation {
-    pub fn object<T>(object: Box<T>) -> Cancellation {
-        unsafe fn callback<T>(object: *mut (), _: usize) {
-            drop(Box::from_raw(object as *mut T))
-        }
-        unsafe { Cancellation::new(Box::into_raw(object) as *mut (), 0, callback::<T>) }
+    fn new<T: Cancel>(object: T) -> Cancellation {
+        let (data, metadata) = object.into_raw();
+        Cancellation { data, metadata, drop: T::drop_raw }
     }
+}
 
-    pub fn dyn_object(object: Box<dyn Any + Send + Sync>) -> Cancellation {
-        #[repr(C)] struct TraitObject {
-            data: *mut (),
-            vtable: *mut (),
-        }
-
-        unsafe fn callback(data: *mut (), metadata: usize) {
-            let obj = TraitObject { data, vtable: metadata as *mut () };
-            drop(mem::transmute::<TraitObject, Box<dyn Any + Send + Sync>>(obj));
-        }
-
-        unsafe {
-            let obj = mem::transmute::<Box<dyn Any + Send + Sync>, TraitObject>(object);
-            Cancellation::new(obj.data, obj.vtable as usize, callback)
-        }
+impl<T: Cancel> From<T> for Cancellation {
+    fn from(object: T) -> Cancellation {
+        Cancellation::new(object)
     }
+}
 
-    pub fn buffer<T>(buffer: Box<[T]>) -> Cancellation {
-        unsafe fn callback<T>(data: *mut (), len: usize) {
-            drop::<Box<[T]>>(Vec::<T>::from_raw_parts(data as *mut T, len, len).into_boxed_slice())
-        }
-        let len = buffer.len();
-        unsafe { Cancellation::new(Box::into_raw(buffer) as *mut (), len, callback::<T>) }
-    }
-
-    pub fn cstring(cstring: CString) -> Cancellation {
-        unsafe fn callback(addr: *mut (), _: usize) {
-            drop(CString::from_raw(addr as *mut _));
-        }
-        unsafe { Cancellation::new(cstring.as_ptr() as *const () as *mut (), 0, callback) }
-    }
-
-    /// Construct a new cancellation callback to hold resources until the event concludes. The
-    /// `drop` argument will be called receive the `data` and `metadata` fields when the
-    /// cancellation is dropped.
-    ///
-    /// ## Safety
-    ///
-    /// When this cancellation is dropped, it will call the `drop` closure, which is an unsafe
-    /// function. Therefore, whatever invariants are necessary to safely call `drop` (such as
-    /// exclusive ownership of some heap allocated data) must met when the cancellation is dropped
-    /// as well.
-    ///
-    /// It must be safe to send the Cancellation type and references to it between threads.
-    pub unsafe fn new(data: *mut (), metadata: usize, drop: unsafe fn(*mut (), usize))
-        -> Cancellation
-    {
-        Cancellation { data, metadata, drop }
-    }
-
-    /// Construct a null cancellation, which does nothing when it is dropped.
-    pub fn null() -> Cancellation {
-        unsafe fn drop(_: *mut (), _: usize) { }
-        Cancellation { data: ptr::null_mut(), metadata: 0, drop }
+impl<T> From<Option<T>> for Cancellation where Cancellation: From<T> {
+    fn from(object: Option<T>) -> Cancellation {
+        object.map_or(Cancellation::new(()), Cancellation::from)
     }
 }
 

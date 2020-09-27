@@ -13,7 +13,7 @@ mod completion;
 mod ring;
 mod submission;
 
-pub use cancellation::Cancellation;
+pub use cancellation::{Cancel, Cancellation};
 pub use ring::Ring;
 pub use submission::Submission;
 

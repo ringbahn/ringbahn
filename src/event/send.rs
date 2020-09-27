@@ -1,5 +1,5 @@
-use std::os::unix::io::RawFd;
 use std::mem::ManuallyDrop;
+use std::os::unix::io::RawFd;
 
 use iou::sqe::MsgFlags;
 use iou::registrar::UringFd;
@@ -21,7 +21,7 @@ impl<FD: UringFd + Copy> Event for Send<FD> {
         sqe
     }
 
-    unsafe fn cancel(this: &mut ManuallyDrop<Self>) -> Cancellation {
-        Cancellation::buffer(ManuallyDrop::take(this).buf)
+    fn cancel(this: ManuallyDrop<Self>) -> Cancellation {
+        Cancellation::from(ManuallyDrop::into_inner(this).buf)
     }
 }

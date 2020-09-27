@@ -21,7 +21,7 @@ impl Event for EpollCtl {
         sqe
     }
 
-    unsafe fn cancel(this: &mut ManuallyDrop<Self>) -> Cancellation {
-        this.event.take().map_or_else(Cancellation::null, Cancellation::object)
+    fn cancel(this: ManuallyDrop<Self>) -> Cancellation {
+        Cancellation::from(ManuallyDrop::into_inner(this).event)
     }
 }

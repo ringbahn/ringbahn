@@ -72,8 +72,8 @@ impl<D: Drive> TcpListener<D> {
 
     fn cancel(&mut self) {
         let cancellation = match self.active {
-            Op::Accept  => self.addr.take().map_or_else(Cancellation::null, Cancellation::object),
-            Op::Close   => Cancellation::null(),
+            Op::Accept  => Cancellation::from(self.addr.take()),
+            Op::Close   => Cancellation::from(()),
             Op::Closed  => return,
             Op::Nothing => return,
         };

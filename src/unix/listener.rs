@@ -69,7 +69,7 @@ impl<D: Drive> UnixListener<D> {
     fn cancel(&mut self) {
         if !matches!(self.active, Op::Nothing | Op::Closed) {
             self.active = Op::Nothing;
-            self.ring.cancel(Cancellation::null());
+            self.ring.cancel(Cancellation::from(()));
         }
     }
 

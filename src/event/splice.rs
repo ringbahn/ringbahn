@@ -1,9 +1,8 @@
 use std::os::unix::io::RawFd;
-use std::mem::ManuallyDrop;
 
 use iou::sqe::SpliceFlags;
 
-use super::{Event, SQE, SQEs, Cancellation};
+use super::{Event, SQE, SQEs};
 
 pub struct Splice {
     pub fd_in: RawFd,
@@ -21,9 +20,5 @@ impl Event for Splice {
         let mut sqe = sqs.single().unwrap();
         sqe.prep_splice(self.fd_in, self.off_in, self.fd_out, self.off_out, self.bytes, self.flags);
         sqe
-    }
-
-    unsafe fn cancel(_: &mut ManuallyDrop<Self>) -> Cancellation {
-        Cancellation::null()
     }
 }

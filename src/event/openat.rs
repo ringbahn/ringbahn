@@ -31,7 +31,7 @@ impl Event for OpenAt {
         sqe
     }
 
-    unsafe fn cancel(this: &mut ManuallyDrop<Self>) -> Cancellation {
-        Cancellation::cstring(ManuallyDrop::take(this).path)
+    fn cancel(this: ManuallyDrop<Self>) -> Cancellation {
+        Cancellation::from(ManuallyDrop::into_inner(this).path)
     }
 }
