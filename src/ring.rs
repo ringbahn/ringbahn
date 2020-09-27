@@ -178,28 +178,34 @@ impl<D: Drive> Ring<D> {
     /// clean up the resources of the running event.
     #[inline]
     pub fn cancel(&mut self, cancellation: Cancellation) {
-        match mem::replace(&mut self.state, Lost) {
-            Prepared(completion) | Submitted(completion) => {
-                self.state = Cancelled(completion.addr());
-                completion.cancel(cancellation);
-            }
-            state                                       => {
-                self.state = state;
-            }
-        }
+        self.state.cancel(cancellation);
     }
 
     /// Cancel any ongoing IO, but from a pinned reference.
     ///
     /// This has the same behavior of as Ring::cancel.
     pub fn cancel_pinned(self: Pin<&mut Self>, cancellation: Cancellation) {
-        unsafe { Pin::get_unchecked_mut(self).cancel(cancellation) }
+        self.split().1.cancel(cancellation);
     }
 
     fn split(self: Pin<&mut Self>) -> (Pin<&mut D>, &mut State) {
         unsafe {
             let this = Pin::get_unchecked_mut(self);
             (Pin::new_unchecked(&mut this.driver), &mut this.state)
+        }
+    }
+}
+
+impl State {
+    fn cancel(&mut self, cancellation: Cancellation) {
+        match mem::replace(self, Lost) {
+            Prepared(completion) | Submitted(completion) => {
+                *self = Cancelled(completion.addr());
+                completion.cancel(cancellation);
+            }
+            state                                       => {
+                *self = state;
+            }
         }
     }
 }

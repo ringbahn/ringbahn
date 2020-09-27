@@ -6,6 +6,7 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use futures_core::{ready, Stream};
+use iou::sqe::SockAddrStorage;
 use nix::sys::socket::{self as nix_socket, SockProtocol, SockFlag};
 
 use crate::drive::demo::DemoDriver;
@@ -60,14 +61,13 @@ impl<D: Drive> TcpListener<D> {
     }
 
     fn guard_op(self: Pin<&mut Self>, op: Op) {
-        let this = unsafe { Pin::get_unchecked_mut(self) };
-        if this.active == Op::Closed {
+        let (ring, addr, active) = self.split();
+        if *active == Op::Closed {
             panic!("Attempted to perform IO on a closed TcpListener");
+        } else if *active != Op::Nothing && *active != op {
+            ring.cancel_pinned(Cancellation::from(addr.take()));
         }
-        if this.active != Op::Nothing && this.active != op {
-            this.cancel();
-        }
-        this.active = op;
+        *active = op;
     }
 
     fn cancel(&mut self) {
@@ -81,26 +81,35 @@ impl<D: Drive> TcpListener<D> {
         self.ring.cancel(cancellation);
     }
 
-    unsafe fn drop_addr(self: Pin<&mut Self>) {
-        Pin::get_unchecked_mut(self).addr.take();
+    fn drop_addr(self: Pin<&mut Self>) {
+        self.split().1.take();
     }
 
     fn ring(self: Pin<&mut Self>) -> Pin<&mut Ring<D>> {
-        unsafe { Pin::map_unchecked_mut(self, |this| &mut this.ring) }
+        self.split().0
     }
 
-    fn split(self: Pin<&mut Self>) -> (Pin<&mut Ring<D>>, &mut iou::sqe::SockAddrStorage) {
+    fn split(self: Pin<&mut Self>) 
+        -> (Pin<&mut Ring<D>>, &mut Option<Box<SockAddrStorage>>, &mut Op)
+    {
         unsafe {
             let this = Pin::get_unchecked_mut(self);
-            if this.addr.is_none() {
-                this.addr = Some(Box::new(iou::sqe::SockAddrStorage::uninit()));
-            }
-            (Pin::new_unchecked(&mut this.ring), &mut **this.addr.as_mut().unwrap())
+            (Pin::new_unchecked(&mut this.ring), &mut this.addr, &mut this.active)
         }
     }
 
+    fn split_with_addr(self: Pin<&mut Self>)
+        -> (Pin<&mut Ring<D>>, &mut SockAddrStorage, &mut Op)
+    {
+        let (ring, addr, active) = self.split();
+        if addr.is_none() {
+            *addr = Some(Box::new(SockAddrStorage::uninit()));
+        }
+        (ring, &mut **addr.as_mut().unwrap(), active)
+    }
+
     fn confirm_close(self: Pin<&mut Self>) {
-        unsafe { Pin::get_unchecked_mut(self).active = Op::Closed; }
+        *self.split().2 = Op::Closed;
     }
 }
 
@@ -142,14 +151,16 @@ impl<D: Drive + Clone> TcpListener<D> {
     {
         self.as_mut().guard_op(Op::Accept);
         let fd = self.fd;
-        let (ring, addr) = self.as_mut().split();
-        let fd = ready!(ring.poll(ctx, 1, |sqs| unsafe {
+        let (ring, addr, ..) = self.as_mut().split_with_addr();
+        let fd = ready!(ring.poll(ctx, 1, |sqs| {
             let mut sqe = sqs.single().unwrap();
-            sqe.prep_accept(fd, Some(addr), SockFlag::empty());
+            unsafe {
+                sqe.prep_accept(fd, Some(addr), SockFlag::empty());
+            }
             sqe
         }))? as RawFd;
-        let addr = unsafe {
-            let result = addr.as_socket_addr();
+        let addr = {
+            let result = unsafe { addr.as_socket_addr() };
             self.as_mut().drop_addr();
             match result? {
                 iou::sqe::SockAddr::Inet(addr) => addr.to_std(),
@@ -165,9 +176,11 @@ impl<D: Drive + Clone> TcpListener<D> {
     {
         self.as_mut().guard_op(Op::Accept);
         let fd = self.fd;
-        let fd = ready!(self.as_mut().ring().poll(ctx, 1, |sqs| unsafe {
+        let fd = ready!(self.as_mut().ring().poll(ctx, 1, |sqs| {
             let mut sqe = sqs.single().unwrap();
-            sqe.prep_accept(fd, None, SockFlag::empty());
+            unsafe {
+                sqe.prep_accept(fd, None, SockFlag::empty());
+            }
             sqe
         }))? as RawFd;
         Poll::Ready(Ok(TcpStream::from_fd(fd, self.ring().clone())))
@@ -256,9 +269,11 @@ impl<'a, D: Drive> Future for Close<'a, D> {
     fn poll(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<io::Result<()>> {
         self.socket.as_mut().guard_op(Op::Close);
         let fd = self.socket.fd;
-        ready!(self.socket.as_mut().ring().poll(ctx, 1, |sqs| unsafe {
+        ready!(self.socket.as_mut().ring().poll(ctx, 1, |sqs| {
             let mut sqe = sqs.single().unwrap();
-            sqe.prep_close(fd);
+            unsafe {
+                sqe.prep_close(fd);
+            }
             sqe
         }))?;
         self.socket.as_mut().confirm_close();

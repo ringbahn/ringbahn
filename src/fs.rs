@@ -94,14 +94,13 @@ impl<D: Drive> File<D> {
     }
 
     fn guard_op(self: Pin<&mut Self>, op: Op) {
-        let this = unsafe { Pin::get_unchecked_mut(self) };
-        if this.active == Op::Closed {
+        let (ring, buf, .., active) = self.split();
+        if *active == Op::Closed {
             panic!("Attempted to perform IO on a closed File");
+        } else if *active != Op::Nothing && *active != op {
+            ring.cancel_pinned(buf.cancellation());
         }
-        if this.active != Op::Nothing && this.active != op {
-            this.cancel();
-        }
-        this.active = op;
+        *active = op;
     }
 
     fn cancel(&mut self) {
@@ -115,45 +114,45 @@ impl<D: Drive> File<D> {
 
         self.as_mut().guard_op(Op::Statx);
         let fd = self.fd;
-        let (ring, buf, _) = self.split();
+        let (ring, buf, ..) = self.split();
         let statx: &mut libc::statx = buf.as_object(|| unsafe { std::mem::zeroed() });
         let flags = iou::sqe::StatxFlags::AT_EMPTY_PATH;
         let mask = iou::sqe::StatxMode::STATX_SIZE;
-        unsafe {
-            ready!(ring.poll(ctx, 1, |sqs| {
-                let mut sqe = sqs.single().unwrap();
+        ready!(ring.poll(ctx, 1, |sqs| {
+            let mut sqe = sqs.single().unwrap();
+            unsafe {
                 sqe.prep_statx(fd, CStr::from_ptr(&EMPTY), flags, mask, &mut *statx);
-                sqe
-            }))?;
-            Poll::Ready(Ok((*statx).stx_size))
-        }
+            }
+            sqe
+        }))?;
+        Poll::Ready(Ok((*statx).stx_size))
     }
 
     #[inline(always)]
-    fn split(self: Pin<&mut Self>) -> (Pin<&mut Ring<D>>, &mut Buffer, &mut u64) {
+    fn split(self: Pin<&mut Self>) -> (Pin<&mut Ring<D>>, &mut Buffer, &mut u64, &mut Op) {
         unsafe {
             let this = Pin::get_unchecked_mut(self);
-            (Pin::new_unchecked(&mut this.ring), &mut this.buf, &mut this.pos)
+            (Pin::new_unchecked(&mut this.ring), &mut this.buf, &mut this.pos, &mut this.active)
         }
     }
 
     #[inline(always)]
     fn ring(self: Pin<&mut Self>) -> Pin<&mut Ring<D>> {
-        unsafe { Pin::map_unchecked_mut(self, |this| &mut this.ring) }
+        self.split().0
     }
 
     #[inline(always)]
-    fn buf(self: Pin<&mut Self>) -> Pin<&mut Buffer> {
-        unsafe { Pin::map_unchecked_mut(self, |this| &mut this.buf) }
+    fn buf(self: Pin<&mut Self>) -> &mut Buffer {
+        self.split().1
     }
 
     #[inline(always)]
-    fn pos(self: Pin<&mut Self>) -> Pin<&mut u64> {
-        unsafe { Pin::map_unchecked_mut(self, |this| &mut this.pos) }
+    fn pos(self: Pin<&mut Self>) -> &mut u64 {
+        self.split().2
     }
 
     fn confirm_close(self: Pin<&mut Self>) {
-        unsafe { Pin::get_unchecked_mut(self).active = Op::Closed; }
+        *self.split().3 = Op::Closed;
     }
 }
 
@@ -172,11 +171,13 @@ impl<D: Drive> AsyncBufRead for File<D> {
     fn poll_fill_buf(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<io::Result<&[u8]>> {
         self.as_mut().guard_op(Op::Read);
         let fd = self.fd;
-        let (ring, buf, pos) = self.split();
+        let (ring, buf, pos, ..) = self.split();
         buf.fill_buf(|buf| {
-            let n = ready!(ring.poll(ctx, 1, |sqs| unsafe {
+            let n = ready!(ring.poll(ctx, 1, |sqs| {
                 let mut sqe = sqs.single().unwrap();
-                sqe.prep_read(fd, buf, *pos);
+                unsafe {
+                    sqe.prep_read(fd, buf, *pos);
+                }
                 sqe
             }))?;
             *pos += n as u64;
@@ -193,13 +194,15 @@ impl<D: Drive> AsyncWrite for File<D> {
     fn poll_write(mut self: Pin<&mut Self>, ctx: &mut Context<'_>, slice: &[u8]) -> Poll<io::Result<usize>> {
         self.as_mut().guard_op(Op::Write);
         let fd = self.fd;
-        let (ring, buf, pos) = self.split();
+        let (ring, buf, pos, ..) = self.split();
         let data = ready!(buf.fill_buf(|mut buf| {
             Poll::Ready(Ok(io::Write::write(&mut buf, slice)? as u32))
         }))?;
-        let n = ready!(ring.poll(ctx, 1, |sqs| unsafe {
+        let n = ready!(ring.poll(ctx, 1, |sqs| {
             let mut sqe = sqs.single().unwrap();
-            sqe.prep_write(fd, data, *pos);
+            unsafe {
+                sqe.prep_write(fd, data, *pos);
+            }
             sqe
         }))?;
         *pos += n as u64;
@@ -215,9 +218,11 @@ impl<D: Drive> AsyncWrite for File<D> {
     fn poll_close(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<io::Result<()>> {
         self.as_mut().guard_op(Op::Close);
         let fd = self.fd;
-        ready!(self.as_mut().ring().poll(ctx, 1, |sqs| unsafe {
+        ready!(self.as_mut().ring().poll(ctx, 1, |sqs| {
             let mut sqe = sqs.single().unwrap();
-            sqe.prep_close(fd);
+            unsafe {
+                sqe.prep_close(fd);
+            }
             sqe
         }))?;
         self.confirm_close();
@@ -269,9 +274,9 @@ impl From<fs::File> for File {
 
 impl<D: Drive> From<File<D>> for fs::File {
     fn from(mut file: File<D>) -> fs::File {
+        file.cancel();
+        let file = ManuallyDrop::new(file);
         unsafe {
-            file.cancel();
-            let file = ManuallyDrop::new(file);
             fs::File::from_raw_fd(file.fd)
         }
     }
