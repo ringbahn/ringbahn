@@ -1,5 +1,4 @@
 use std::mem::ManuallyDrop;
-
 use iou::sqe::BufferGroupId;
 
 use super::{Event, SQE, SQEs, Cancellation};
@@ -20,8 +19,8 @@ impl Event for ProvideBuffers {
         sqe
     }
 
-    unsafe fn cancel(this: &mut ManuallyDrop<Self>) -> Cancellation {
-        Cancellation::buffer(ManuallyDrop::take(this).bufs)
+    fn cancel(this: ManuallyDrop<Self>) -> Cancellation {
+        Cancellation::from(ManuallyDrop::into_inner(this).bufs)
     }
 }
 
@@ -37,9 +36,5 @@ impl Event for RemoveBuffers {
         let mut sqe = sqs.single().unwrap();
         sqe.prep_remove_buffers(self.count, self.group);
         sqe
-    }
-
-    unsafe fn cancel(_: &mut ManuallyDrop<Self>) -> Cancellation {
-        Cancellation::null()
     }
 }

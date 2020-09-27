@@ -1,5 +1,5 @@
-use std::os::unix::io::RawFd;
 use std::mem::ManuallyDrop;
+use std::os::unix::io::RawFd;
 
 use iou::sqe::SockAddr;
 use iou::registrar::UringFd;
@@ -20,7 +20,7 @@ impl<FD: UringFd + Copy> Event for Connect<FD> {
         sqe
     }
 
-    unsafe fn cancel(this: &mut ManuallyDrop<Self>) -> Cancellation {
-        Cancellation::object(ManuallyDrop::take(this).addr)
+    fn cancel(this: ManuallyDrop<Self>) -> Cancellation {
+        Cancellation::from(ManuallyDrop::into_inner(this).addr)
     }
 }

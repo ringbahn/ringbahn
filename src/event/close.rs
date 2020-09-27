@@ -1,9 +1,8 @@
-use std::mem::ManuallyDrop;
 use std::os::unix::io::RawFd;
 
 use iou::registrar::UringFd;
 
-use super::{Event, SQE, SQEs, Cancellation};
+use super::{Event, SQE, SQEs};
 
 pub struct Close<FD = RawFd> {
     pub fd: FD,
@@ -16,9 +15,5 @@ impl<FD: UringFd + Copy> Event for Close<FD> {
         let mut sqe = sqs.single().unwrap();
         sqe.prep_close(self.fd);
         sqe
-    }
-
-    unsafe fn cancel(_: &mut ManuallyDrop<Self>) -> Cancellation {
-        Cancellation::null()
     }
 }

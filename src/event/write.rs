@@ -1,5 +1,5 @@
-use std::os::unix::io::RawFd;
 use std::mem::ManuallyDrop;
+use std::os::unix::io::RawFd;
 
 use iou::registrar::{UringFd, RegisteredBuf};
 
@@ -21,8 +21,8 @@ impl<FD: UringFd + Copy> Event for Write<FD> {
         sqe
     }
 
-    unsafe fn cancel(this: &mut ManuallyDrop<Self>) -> Cancellation {
-        Cancellation::buffer(ManuallyDrop::take(this).buf)
+    fn cancel(this: ManuallyDrop<Self>) -> Cancellation {
+        Cancellation::from(ManuallyDrop::into_inner(this).buf)
     }
 }
 
@@ -41,7 +41,7 @@ impl<FD: UringFd + Copy> Event for WriteFixed<FD> {
         sqe
     }
 
-    unsafe fn cancel(this: &mut ManuallyDrop<Self>) -> Cancellation {
-        Cancellation::buffer(ManuallyDrop::take(this).buf.into_inner())
+    fn cancel(this: ManuallyDrop<Self>) -> Cancellation {
+        Cancellation::from(ManuallyDrop::into_inner(this).buf)
     }
 }

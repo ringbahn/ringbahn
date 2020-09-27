@@ -22,8 +22,9 @@ mod writev;
 
 use std::mem::ManuallyDrop;
 
-use crate::cancellation::Cancellation;
 use iou::{SQE, SQEs};
+
+use crate::cancellation::Cancellation;
 
 pub use accept::Accept;
 pub use close::Close;
@@ -82,14 +83,7 @@ pub trait Event {
     /// If this event is cancelled, this callback will be stored with the completion to be dropped
     /// when the IO event completes. This way, any managed resources passed to the kernel (like
     /// buffers) can be cleaned up once the kernel no longer needs them.
-    ///
-    /// ## Safety
-    ///
-    /// When this method is called, the event will never accessed again in any way. No methods will
-    /// ever be called, including its destructor. The cancellation that is constructed will then
-    /// not be dropped until after the event has been completed by the kernel.
-    ///
-    /// The cancellation can take ownership from the event of any resources owned by the kernel,
-    /// and then clean up those resources when the kernel completes the event.
-    unsafe fn cancel(this: &mut ManuallyDrop<Self>) -> Cancellation;
+    fn cancel(_: ManuallyDrop<Self>) -> Cancellation where Self: Sized {
+        Cancellation::from(())
+    }
 }

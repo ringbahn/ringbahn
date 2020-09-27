@@ -1,5 +1,5 @@
-use std::os::unix::io::RawFd;
 use std::mem::ManuallyDrop;
+use std::os::unix::io::RawFd;
 
 use super::{Event, SQE, SQEs, Cancellation};
 
@@ -17,7 +17,7 @@ impl Event for FilesUpdate {
         sqe
     }
 
-    unsafe fn cancel(this: &mut ManuallyDrop<Self>) -> Cancellation {
-        Cancellation::buffer(ManuallyDrop::take(this).files)
+    fn cancel(this: ManuallyDrop<Self>) -> Cancellation {
+        Cancellation::from(ManuallyDrop::into_inner(this).files)
     }
 }
