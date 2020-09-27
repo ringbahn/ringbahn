@@ -116,7 +116,7 @@ impl<D: Drive> File<D> {
         self.as_mut().guard_op(Op::Statx);
         let fd = self.fd;
         let (ring, buf, _) = self.split();
-        let statx = buf.as_statx();
+        let statx: &mut libc::statx = buf.as_object(|| unsafe { std::mem::zeroed() });
         let flags = iou::sqe::StatxFlags::AT_EMPTY_PATH;
         let mask = iou::sqe::StatxMode::STATX_SIZE;
         unsafe {

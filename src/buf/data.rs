@@ -15,9 +15,9 @@ impl Data {
         self.inner.as_mut().unwrap().bytes_mut().unwrap()
     }
 
-    pub fn alloc<T: Send + Sync + 'static>(&mut self, data: T) -> &mut T  {
+    pub fn alloc<T: Send + Sync + 'static>(&mut self, callback: impl FnOnce() -> T) -> &mut T  {
         if self.inner.is_none() {
-            self.inner = Some(Inner::Object(Box::new(data)));
+            self.inner = Some(Inner::Object(Box::new(callback())));
         }
         self.inner.as_mut().unwrap().downcast().unwrap()
     }

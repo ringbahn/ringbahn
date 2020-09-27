@@ -1,8 +1,8 @@
 mod data;
 
+use std::any::Any;
 use std::cmp;
 use std::io;
-use std::mem;
 use std::task::Poll;
 
 use futures_core::ready;
@@ -49,8 +49,8 @@ impl Buffer {
         self.cap = 0;
     }
 
-    pub fn as_statx(&mut self) -> &mut libc::statx {
-        self.data.alloc(unsafe { mem::zeroed() })
+    pub fn as_object<T: Any + Send + Sync>(&mut self, callback: impl FnOnce() -> T) -> &mut T {
+        self.data.alloc(callback)
     }
 
     pub fn cancellation(&mut self) -> Cancellation {
