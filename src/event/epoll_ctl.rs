@@ -17,7 +17,7 @@ impl Event for EpollCtl {
 
     unsafe fn prepare<'sq>(&mut self, sqs: &mut SQEs<'sq>) -> SQE<'sq> {
         let mut sqe = sqs.single().unwrap();
-        sqe.prep_epoll_ctl(self.epoll_fd, self.op, self.fd, self.event.as_mut().map(|e| &mut **e));
+        sqe.prep_epoll_ctl(self.epoll_fd, self.op, self.fd, self.event.as_deref_mut());
         sqe
     }
 
