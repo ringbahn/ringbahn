@@ -17,7 +17,7 @@ impl<FD: UringFd + Copy> Event for Accept<FD> {
 
     unsafe fn prepare<'sq>(&mut self, sqs: &mut SQEs<'sq>) -> SQE<'sq> {
         let mut sqe = sqs.single().unwrap();
-        sqe.prep_accept(self.fd, self.addr.as_mut().map(|addr| &mut **addr), self.flags);
+        sqe.prep_accept(self.fd, self.addr.as_deref_mut(), self.flags);
         sqe
     }
 
