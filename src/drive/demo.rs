@@ -104,15 +104,12 @@ pub fn registrar() -> Option<&'static Registrar<'static>> {
 }
 
 fn init() -> Queues {
-    unsafe {
-        use std::mem::MaybeUninit;
-        static mut RING: MaybeUninit<IoUring> = MaybeUninit::uninit();
-        let ring = IoUring::new_with_flags(ENTRIES, SetupFlags::empty(), SetupFeatures::NODROP)
-                            .expect("TODO handle io_uring_init failure");
-        RING = MaybeUninit::new(ring);
-        let (sq, cq, reg) = (&mut *RING.as_mut_ptr()).queues();
-        (Mutex::new(sq), Mutex::new(cq), reg, Event::new())
-    }
+    let flags = SetupFlags::empty();
+    let features = SetupFeatures::NODROP;
+    let ring = Box::new(IoUring::new_with_flags(ENTRIES, flags, features).unwrap());
+    let ring = Box::leak(ring);
+    let (sq, cq, reg) = ring.queues();
+    (Mutex::new(sq), Mutex::new(cq), reg, Event::new())
 }
 
 static STARTED_COMPLETION_THREAD: Once = Once::new();
