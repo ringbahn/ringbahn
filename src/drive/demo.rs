@@ -33,8 +33,15 @@ pub struct DemoDriver {
 }
 
 impl DemoDriver {
-    fn poll_submit_inner(&mut self, sq: &mut SubmissionQueue<'_>) -> Poll<io::Result<u32>> {
+    fn poll_submit_inner(&mut self, ctx: &mut Context<'_>, sq: &mut SubmissionQueue<'_>)
+        -> Poll<io::Result<u32>>
+    {
         start_completion_thread();
+
+        if let Some(listener) = &mut self.listener {
+            ready!(Pin::new(listener).poll(ctx));
+        }
+
         match sq.submit() {
             Ok(n)       => Poll::Ready(Ok(n)),
             Err(err)    => {
@@ -68,16 +75,12 @@ impl Drive for DemoDriver {
         count: u32,
         prepare: impl FnOnce(SQEs<'_>, &mut Context<'cx>) -> Completion<'cx>,
     ) -> Poll<Completion<'cx>> {
-        if let Some(listener) = &mut self.listener {
-            ready!(Pin::new(listener).poll(ctx));
-        }
-
         let mut sq = QUEUES.0.lock();
         loop {
             match sq.prepare_sqes(count) {
                 Some(sqs)   => return Poll::Ready(prepare(sqs, ctx)),
                 None        => {
-                    let _ = ready!(self.poll_submit_inner(&mut *sq));
+                    let _ = ready!(self.poll_submit_inner(ctx, &mut *sq));
                 }
             }
         }
@@ -85,9 +88,9 @@ impl Drive for DemoDriver {
 
     fn poll_submit(
         mut self: Pin<&mut Self>,
-        _: &mut Context<'_>,
+        ctx: &mut Context<'_>,
     ) -> Poll<io::Result<u32>> {
-        self.poll_submit_inner(&mut *QUEUES.0.lock())
+        self.poll_submit_inner(ctx, &mut *QUEUES.0.lock())
     }
 }
 
