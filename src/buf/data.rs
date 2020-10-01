@@ -1,6 +1,6 @@
 use std::any::Any;
 
-use crate::Cancellation;
+use crate::ring::Cancellation;
 
 #[derive(Default)]
 pub struct Data {

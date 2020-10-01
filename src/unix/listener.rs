@@ -8,9 +8,8 @@ use std::task::{Context, Poll};
 use futures_core::{ready, Stream};
 use nix::sys::socket::{self as nix_socket, SockFlag};
 
-use crate::drive::demo::DemoDriver;
-use crate::Cancellation;
-use crate::{Drive, Ring};
+use crate::drive::{Drive, demo::DemoDriver};
+use crate::ring::{Ring, Cancellation};
 
 use super::UnixStream;
 

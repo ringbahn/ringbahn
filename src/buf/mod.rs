@@ -7,7 +7,7 @@ use std::task::Poll;
 
 use futures_core::ready;
 
-use crate::Cancellation;
+use crate::ring::Cancellation;
 
 use data::Data;
 

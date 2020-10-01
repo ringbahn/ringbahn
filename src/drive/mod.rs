@@ -7,24 +7,24 @@ use std::marker::PhantomData;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use crate::completion;
+use crate::ring;
 use crate::{Submission, Event};
 use iou::{SQE, SQEs};
 
-pub use completion::complete;
+pub use crate::ring::completion::complete;
 
 /// A completion which will be used to wake the task waiting on this event.
 ///
 /// This type is opaque to users of ringbahn. It is constructed by the callback passed to
 /// [Drive::poll_prepare].
 pub struct Completion<'cx> {
-    pub(crate) real: completion::Completion,
+    pub(crate) real: ring::Completion,
     marker: PhantomData<fn(&'cx ()) -> &'cx ()>,
 }
 
 impl<'cx> Completion<'cx> {
     pub(crate) fn new(mut sqe: SQE<'_>, _sqes: SQEs<'_>, cx: &mut Context<'cx>) -> Completion<'cx> {
-        let real = completion::Completion::new(cx.waker().clone());
+        let real = ring::Completion::new(cx.waker().clone());
         unsafe {
             sqe.set_user_data(real.addr());
         }

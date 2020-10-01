@@ -11,8 +11,8 @@ use iou::sqe::SockAddr;
 use nix::sys::socket::SockProtocol;
 
 use crate::buf::Buffer;
-use crate::drive::demo::DemoDriver;
-use crate::{Drive, Ring};
+use crate::drive::{Drive, demo::DemoDriver};
+use crate::ring::Ring;
 use crate::event;
 use crate::Submission;
 

@@ -5,7 +5,7 @@ use std::task::Waker;
 
 use parking_lot::Mutex;
 
-use crate::Cancellation;
+use crate::ring::Cancellation;
 use iou::CQE;
 
 use State::*;

@@ -1,7 +1,7 @@
 use std::io::SeekFrom;
 use futures::{AsyncSeekExt, AsyncReadExt, AsyncWriteExt};
 
-use ringbahn::File;
+use ringbahn::fs::File;
 
 #[test]
 fn seek_to_end() {

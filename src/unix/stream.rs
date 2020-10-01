@@ -10,9 +10,9 @@ use futures_io::{AsyncRead, AsyncBufRead, AsyncWrite};
 use iou::sqe::SockAddr;
 use nix::sys::socket::UnixAddr;
 
-use crate::drive::demo::DemoDriver;
-use crate::{Drive, Ring};
+use crate::drive::{Drive, demo::DemoDriver};
 use crate::event;
+use crate::ring::Ring;
 use crate::Submission;
 
 use super::{socket, socketpair};

@@ -1,6 +1,6 @@
 use futures::AsyncReadExt;
 
-use ringbahn::File;
+use ringbahn::fs::File;
 
 const ASSERT: &[u8] = b"But this formidable power of death -";
 

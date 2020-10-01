@@ -7,7 +7,7 @@ use std::task::{Poll, Context};
 
 use futures_core::ready;
 
-use crate::{Drive, Ring};
+use crate::{Drive, ring::Ring};
 
 #[macro_export]
 macro_rules! print {

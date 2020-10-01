@@ -1,7 +1,7 @@
 use futures::io::AsyncReadExt;
 use futures::io::AsyncWriteExt;
 
-use ringbahn::File;
+use ringbahn::fs::File;
 
 fn main() {
     futures::executor::block_on(async move {

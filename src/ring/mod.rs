@@ -1,3 +1,6 @@
+mod cancellation;
+pub(crate) mod completion;
+
 use std::io;
 use std::mem;
 use std::pin::Pin;
@@ -6,9 +9,10 @@ use std::task::{Context, Poll};
 use futures_core::ready;
 use iou::{SQE, SQEs};
 
-use crate::completion::Completion;
 use crate::drive::{self, Drive};
-use crate::Cancellation;
+
+pub use cancellation::{Cancellation, Cancel, CancelNarrow};
+pub(crate) use completion::Completion;
 
 use State::*;
 
