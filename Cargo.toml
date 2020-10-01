@@ -17,6 +17,7 @@ libc = "0.2.71"
 uring-sys = "0.7.4"
 nix = "0.18.0"
 iou = "0.3.3"
+either = "1.6.1"
 
 [dev-dependencies]
 tempfile = "3.1.0"

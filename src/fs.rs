@@ -3,12 +3,13 @@
 use std::fs;
 use std::future::Future;
 use std::io;
-use std::mem::ManuallyDrop;
+use std::mem::{self, ManuallyDrop};
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 use std::path::Path;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
+use either::Either;
 use futures_core::ready;
 use futures_io::{AsyncRead, AsyncBufRead, AsyncWrite, AsyncSeek};
 use iou::sqe::{OFlag, Mode};
@@ -16,16 +17,18 @@ use iou::sqe::{OFlag, Mode};
 use crate::buf::Buffer;
 use crate::drive::Drive;
 use crate::drive::demo::DemoDriver;
-use crate::ring::Ring;
+use crate::ring::{Ring, Cancellation};
 use crate::event::OpenAt;
 use crate::Submission;
+
+type FileBuf = Either<Buffer, Box<libc::statx>>;
 
 /// A file handle that runs on io-uring
 pub struct File<D: Drive = DemoDriver<'static>> {
     ring: Ring<D>,
     fd: RawFd,
     active: Op,
-    buf: Buffer,
+    buf: FileBuf,
     pos: u64,
 }
 
@@ -76,7 +79,7 @@ impl<D: Drive> File<D> {
         File {
             ring: Ring::new(driver),
             active: Op::Nothing,
-            buf: Buffer::new(),
+            buf: Either::Left(Buffer::new()),
             pos: 0,
             fd,
         }
@@ -89,7 +92,7 @@ impl<D: Drive> File<D> {
     /// out any left over buffered data before closing or performing a write.
     pub fn read_buffered(&self) -> &[u8] {
         if self.active == Op::Read {
-            self.buf.buffered_from_read()
+            self.buf.as_ref().unwrap_left().buffered_from_read()
         } else { &[] }
     }
 
@@ -98,14 +101,14 @@ impl<D: Drive> File<D> {
         if *active == Op::Closed {
             panic!("Attempted to perform IO on a closed File");
         } else if *active != Op::Nothing && *active != op {
-            ring.cancel_pinned(buf.cancellation());
+            ring.cancel_pinned(Cancellation::from(mem::replace(buf, Either::Left(Buffer::new()))));
         }
         *active = op;
     }
 
     fn cancel(&mut self) {
         self.active = Op::Nothing;
-        self.ring.cancel(self.buf.cancellation());
+        self.ring.cancel(Cancellation::from(mem::replace(&mut self.buf, Either::Left(Buffer::new()))));
     }
 
     fn poll_file_size(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<io::Result<u64>> {
@@ -114,14 +117,13 @@ impl<D: Drive> File<D> {
 
         self.as_mut().guard_op(Op::Statx);
         let fd = self.fd;
-        let (ring, buf, ..) = self.split();
-        let statx: &mut libc::statx = buf.as_object(|| unsafe { std::mem::zeroed() });
+        let (ring, statx, ..) = self.split_statx();
         let flags = iou::sqe::StatxFlags::AT_EMPTY_PATH;
         let mask = iou::sqe::StatxMode::STATX_SIZE;
         ready!(ring.poll(ctx, 1, |sqs| {
             let mut sqe = sqs.single().unwrap();
             unsafe {
-                sqe.prep_statx(fd, CStr::from_ptr(&EMPTY), flags, mask, &mut *statx);
+                sqe.prep_statx(fd, CStr::from_ptr(&EMPTY), flags, mask, statx);
             }
             sqe
         }))?;
@@ -129,11 +131,28 @@ impl<D: Drive> File<D> {
     }
 
     #[inline(always)]
-    fn split(self: Pin<&mut Self>) -> (Pin<&mut Ring<D>>, &mut Buffer, &mut u64, &mut Op) {
+    fn split(self: Pin<&mut Self>) -> (Pin<&mut Ring<D>>, &mut FileBuf, &mut u64, &mut Op) {
         unsafe {
             let this = Pin::get_unchecked_mut(self);
             (Pin::new_unchecked(&mut this.ring), &mut this.buf, &mut this.pos, &mut this.active)
         }
+    }
+
+    #[inline(always)]
+    fn split_buf(self: Pin<&mut Self>) -> (Pin<&mut Ring<D>>, &mut Buffer, &mut u64, &mut Op) {
+        let (ring, buf, pos, active) = self.split();
+        let buf = buf.as_mut().unwrap_left();
+        (ring, buf, pos, active)
+    }
+
+    #[inline(always)]
+    fn split_statx(self: Pin<&mut Self>) -> (Pin<&mut Ring<D>>, &mut libc::statx, &mut u64, &mut Op) {
+        let (ring, buf, pos, active) = self.split();
+        if buf.is_left() {
+            *buf = Either::Right(Box::new(unsafe { mem::zeroed() }));
+        }
+        let statx = buf.as_mut().unwrap_right();
+        (ring, statx, pos, active)
     }
 
     #[inline(always)]
@@ -143,7 +162,7 @@ impl<D: Drive> File<D> {
 
     #[inline(always)]
     fn buf(self: Pin<&mut Self>) -> &mut Buffer {
-        self.split().1
+        self.split_buf().1
     }
 
     #[inline(always)]
@@ -171,7 +190,7 @@ impl<D: Drive> AsyncBufRead for File<D> {
     fn poll_fill_buf(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<io::Result<&[u8]>> {
         self.as_mut().guard_op(Op::Read);
         let fd = self.fd;
-        let (ring, buf, pos, ..) = self.split();
+        let (ring, buf, pos, ..) = self.split_buf();
         buf.fill_buf(|buf| {
             let n = ready!(ring.poll(ctx, 1, |sqs| {
                 let mut sqe = sqs.single().unwrap();
@@ -194,7 +213,7 @@ impl<D: Drive> AsyncWrite for File<D> {
     fn poll_write(mut self: Pin<&mut Self>, ctx: &mut Context<'_>, slice: &[u8]) -> Poll<io::Result<usize>> {
         self.as_mut().guard_op(Op::Write);
         let fd = self.fd;
-        let (ring, buf, pos, ..) = self.split();
+        let (ring, buf, pos, ..) = self.split_buf();
         let data = ready!(buf.fill_buf(|mut buf| {
             Poll::Ready(Ok(io::Write::write(&mut buf, slice)? as u32))
         }))?;
