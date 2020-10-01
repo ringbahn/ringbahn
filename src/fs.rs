@@ -79,7 +79,7 @@ impl<D: Drive> File<D> {
         File {
             ring: Ring::new(driver),
             active: Op::Nothing,
-            buf: Either::Left(Buffer::new()),
+            buf: Either::Left(Buffer::default()),
             pos: 0,
             fd,
         }
@@ -101,14 +101,16 @@ impl<D: Drive> File<D> {
         if *active == Op::Closed {
             panic!("Attempted to perform IO on a closed File");
         } else if *active != Op::Nothing && *active != op {
-            ring.cancel_pinned(Cancellation::from(mem::replace(buf, Either::Left(Buffer::new()))));
+            let new_buf = Either::Left(Buffer::default());
+            ring.cancel_pinned(Cancellation::from(mem::replace(buf, new_buf)));
         }
         *active = op;
     }
 
     fn cancel(&mut self) {
         self.active = Op::Nothing;
-        self.ring.cancel(Cancellation::from(mem::replace(&mut self.buf, Either::Left(Buffer::new()))));
+        let new_buf = Either::Left(Buffer::default());
+        self.ring.cancel(Cancellation::from(mem::replace(&mut self.buf, new_buf)));
     }
 
     fn poll_file_size(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<io::Result<u64>> {

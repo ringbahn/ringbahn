@@ -6,7 +6,7 @@ use futures_core::ready;
 
 use crate::ring::Cancellation;
 
-#[derive(Debug)]
+#[derive(Default, Debug)]
 pub struct Buffer {
     data: Option<Box<[u8]>>,
     pos: u32,
@@ -14,14 +14,6 @@ pub struct Buffer {
 }
 
 impl Buffer {
-    pub fn new() -> Buffer {
-        Buffer {
-            data: None,
-            pos: 0,
-            cap: 0,
-        }
-    }
-
     pub fn buffered_from_read(&self) -> &[u8] {
         self.as_bytes().map_or(&[], |data| &data[self.pos as usize..self.cap as usize])
     }
