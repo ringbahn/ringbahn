@@ -119,7 +119,7 @@ impl<D: Drive> File<D> {
 
         self.as_mut().guard_op(Op::Statx);
         let fd = self.fd;
-        let (ring, statx, ..) = self.split_statx();
+        let (ring, statx, ..) = self.split_with_statx();
         let flags = iou::sqe::StatxFlags::AT_EMPTY_PATH;
         let mask = iou::sqe::StatxMode::STATX_SIZE;
         ready!(ring.poll(ctx, 1, |sqs| {
@@ -141,14 +141,18 @@ impl<D: Drive> File<D> {
     }
 
     #[inline(always)]
-    fn split_buf(self: Pin<&mut Self>) -> (Pin<&mut Ring<D>>, &mut Buffer, &mut u64, &mut Op) {
+    fn split_with_buf(self: Pin<&mut Self>)
+        -> (Pin<&mut Ring<D>>, &mut Buffer, &mut u64, &mut Op)
+    {
         let (ring, buf, pos, active) = self.split();
         let buf = buf.as_mut().unwrap_left();
         (ring, buf, pos, active)
     }
 
     #[inline(always)]
-    fn split_statx(self: Pin<&mut Self>) -> (Pin<&mut Ring<D>>, &mut libc::statx, &mut u64, &mut Op) {
+    fn split_with_statx(self: Pin<&mut Self>)
+        -> (Pin<&mut Ring<D>>, &mut libc::statx, &mut u64, &mut Op)
+    {
         let (ring, buf, pos, active) = self.split();
         if buf.is_left() {
             *buf = Either::Right(Box::new(unsafe { mem::zeroed() }));
@@ -164,7 +168,7 @@ impl<D: Drive> File<D> {
 
     #[inline(always)]
     fn buf(self: Pin<&mut Self>) -> &mut Buffer {
-        self.split_buf().1
+        self.split_with_buf().1
     }
 
     #[inline(always)]
@@ -192,7 +196,7 @@ impl<D: Drive> AsyncBufRead for File<D> {
     fn poll_fill_buf(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<io::Result<&[u8]>> {
         self.as_mut().guard_op(Op::Read);
         let fd = self.fd;
-        let (ring, buf, pos, ..) = self.split_buf();
+        let (ring, buf, pos, ..) = self.split_with_buf();
         buf.fill_buf(|buf| {
             let n = ready!(ring.poll(ctx, 1, |sqs| {
                 let mut sqe = sqs.single().unwrap();
@@ -215,7 +219,7 @@ impl<D: Drive> AsyncWrite for File<D> {
     fn poll_write(mut self: Pin<&mut Self>, ctx: &mut Context<'_>, slice: &[u8]) -> Poll<io::Result<usize>> {
         self.as_mut().guard_op(Op::Write);
         let fd = self.fd;
-        let (ring, buf, pos, ..) = self.split_buf();
+        let (ring, buf, pos, ..) = self.split_with_buf();
         let data = ready!(buf.fill_buf(|mut buf| {
             Poll::Ready(Ok(io::Write::write(&mut buf, slice)? as u32))
         }))?;
