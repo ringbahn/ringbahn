@@ -32,6 +32,23 @@ pub struct DemoDriver {
     listener: Option<EventListener>,
 }
 
+impl DemoDriver {
+    fn poll_submit_inner(&mut self, sq: &mut SubmissionQueue<'_>) -> Poll<io::Result<u32>> {
+        start_completion_thread();
+        match sq.submit() {
+            Ok(n)       => Poll::Ready(Ok(n)),
+            Err(err)    => {
+                if err.raw_os_error().map_or(false, |code| code == libc::EBUSY) {
+                    self.listener = Some(QUEUES.3.listen());
+                    Poll::Pending
+                } else {
+                    Poll::Ready(Err(err))
+                }
+            }
+        }
+    }
+}
+
 impl Default for DemoDriver {
     fn default() -> Self {
         driver()
@@ -59,7 +76,9 @@ impl Drive for DemoDriver {
         loop {
             match sq.prepare_sqes(count) {
                 Some(sqs)   => return Poll::Ready(prepare(sqs, ctx)),
-                None        => { let _ = sq.submit(); }
+                None        => {
+                    let _ = ready!(self.poll_submit_inner(&mut *sq));
+                }
             }
         }
     }
@@ -68,18 +87,7 @@ impl Drive for DemoDriver {
         mut self: Pin<&mut Self>,
         _: &mut Context<'_>,
     ) -> Poll<io::Result<u32>> {
-        start_completion_thread();
-        match QUEUES.0.lock().submit() {
-            Ok(n)       => Poll::Ready(Ok(n)),
-            Err(err)    => {
-                if err.raw_os_error().map_or(false, |code| code == libc::EBUSY) {
-                    self.listener = Some(QUEUES.3.listen());
-                    Poll::Pending
-                } else {
-                    Poll::Ready(Err(err))
-                }
-            }
-        }
+        self.poll_submit_inner(&mut *QUEUES.0.lock())
     }
 }
 
