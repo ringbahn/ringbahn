@@ -8,7 +8,6 @@ license = "MIT OR Apache-2.0"
 edition = "2018"
 
 [dependencies]
-access-queue = "1.1.0"
 futures-io = "0.3.5"
 futures-core = "0.3.5"
 parking_lot = "0.10.2"
@@ -18,6 +17,7 @@ uring-sys = "0.7.4"
 nix = "0.18.0"
 iou = "0.3.3"
 either = "1.6.1"
+event-listener = "2.5.1"
 
 [dev-dependencies]
 tempfile = "3.1.0"

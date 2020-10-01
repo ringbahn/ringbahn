@@ -14,7 +14,7 @@ use crate::ring::{Cancellation, Ring};
 
 use super::TcpStream;
 
-pub struct TcpListener<D: Drive = DemoDriver<'static>> {
+pub struct TcpListener<D: Drive = DemoDriver> {
     ring: Ring<D>,
     fd: RawFd,
     active: Op,

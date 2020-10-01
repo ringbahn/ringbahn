@@ -13,7 +13,7 @@ use crate::ring::{Ring, Cancellation};
 
 use super::UnixStream;
 
-pub struct UnixListener<D: Drive = DemoDriver<'static>> {
+pub struct UnixListener<D: Drive = DemoDriver> {
     ring: Ring<D>,
     fd: RawFd,
     active: Op,

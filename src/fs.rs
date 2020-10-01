@@ -24,7 +24,7 @@ use crate::Submission;
 type FileBuf = Either<Buffer, Box<libc::statx>>;
 
 /// A file handle that runs on io-uring
-pub struct File<D: Drive = DemoDriver<'static>> {
+pub struct File<D: Drive = DemoDriver> {
     ring: Ring<D>,
     fd: RawFd,
     active: Op,
@@ -318,7 +318,7 @@ impl<D: Drive> Drop for File<D> {
 }
 
 /// A future representing an opening file.
-pub struct Open<D: Drive = DemoDriver<'static>>(Submission<OpenAt, D>);
+pub struct Open<D: Drive = DemoDriver>(Submission<OpenAt, D>);
 
 impl<D: Drive> Open<D> {
     fn inner(self: Pin<&mut Self>) -> Pin<&mut Submission<OpenAt, D>> {
@@ -339,7 +339,7 @@ impl<D: Drive + Clone> Future for Open<D> {
 }
 
 /// A future representing a file being created.
-pub struct Create<D: Drive = DemoDriver<'static>>(Submission<OpenAt, D>);
+pub struct Create<D: Drive = DemoDriver>(Submission<OpenAt, D>);
 
 impl<D: Drive> Create<D> {
     fn inner(self: Pin<&mut Self>) -> Pin<&mut Submission<OpenAt, D>> {
