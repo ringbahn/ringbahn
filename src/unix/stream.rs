@@ -19,7 +19,7 @@ use super::{socket, socketpair};
 
 use crate::net::TcpStream;
 
-pub struct UnixStream<D: Drive = DemoDriver<'static>> {
+pub struct UnixStream<D: Drive = DemoDriver> {
     inner: TcpStream<D>,
 }
 
@@ -64,7 +64,7 @@ impl<D: Drive> UnixStream<D> {
     }
 }
 
-pub struct Connect<D: Drive = DemoDriver<'static>>(
+pub struct Connect<D: Drive = DemoDriver>(
     Result<Submission<event::Connect, D>, Option<io::Error>>
 );
 

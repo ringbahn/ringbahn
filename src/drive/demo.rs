@@ -7,57 +7,55 @@ use std::sync::Once;
 use std::task::{Poll, Context};
 use std::thread;
 
+use event_listener::*;
 use futures_core::ready;
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 
-const SQ_ENTRIES: u32   = 32;
-const CQ_ENTRIES: usize = (SQ_ENTRIES * 2) as usize;
-
-use access_queue::*;
+const ENTRIES: u32   = 32;
 
 use super::{Drive, Completion};
 
 use iou::*;
 
-static QUEUES: Lazy<(
-    AccessQueue<Mutex<SubmissionQueue<'static>>>,
+type Queues = (
+    Mutex<SubmissionQueue<'static>>,
     Mutex<CompletionQueue<'static>>,
-    Registrar<'static>
-)> = Lazy::new(init);
+    Registrar<'static>,
+    Event,
+);
+
+static QUEUES: Lazy<Queues> = Lazy::new(init);
 
 /// The driver handle
-pub struct DemoDriver<'a> {
-    sq: Access<'a, Mutex<SubmissionQueue<'static>>>,
+pub struct DemoDriver {
+    listener: Option<EventListener>,
 }
 
-impl Default for DemoDriver<'_> {
+impl Default for DemoDriver {
     fn default() -> Self {
         driver()
     }
 }
 
-impl<'a> Clone for DemoDriver<'a> {
-    fn clone(&self) -> DemoDriver<'a> {
+impl Clone for DemoDriver {
+    fn clone(&self) -> DemoDriver {
         driver()
     }
 }
 
-impl Drive for DemoDriver<'_> {
+impl Drive for DemoDriver {
     fn poll_prepare<'cx>(
         mut self: Pin<&mut Self>,
         ctx: &mut Context<'cx>,
         count: u32,
         prepare: impl FnOnce(SQEs<'_>, &mut Context<'cx>) -> Completion<'cx>,
     ) -> Poll<Completion<'cx>> {
-        // Wait for access to prepare. When ready, create a new Access future to wait next time we
-        // want to prepare with this driver, and lock the SQ.
-        //
-        // TODO likely we should be using a nonblocking mutex?
-        let access = ready!(Pin::new(&mut self.sq).poll(ctx));
-        let (sq, access) = access.hold_and_reenqueue();
-        self.sq = access;
-        let mut sq = sq.lock();
+        if let Some(listener) = &mut self.listener {
+            ready!(Pin::new(listener).poll(ctx));
+        }
+
+        let mut sq = QUEUES.0.lock();
         loop {
             match sq.prepare_sqes(count) {
                 Some(sqs)   => return Poll::Ready(prepare(sqs, ctx)),
@@ -67,17 +65,29 @@ impl Drive for DemoDriver<'_> {
     }
 
     fn poll_submit(
-        self: Pin<&mut Self>,
+        mut self: Pin<&mut Self>,
         _: &mut Context<'_>,
     ) -> Poll<io::Result<u32>> {
         start_completion_thread();
-        Poll::Ready(self.sq.skip_queue().lock().submit())
+        match QUEUES.0.lock().submit() {
+            Ok(n)       => Poll::Ready(Ok(n)),
+            Err(err)    => {
+                if err.raw_os_error().map_or(false, |code| code == libc::EBUSY) {
+                    self.listener = Some(QUEUES.3.listen());
+                    Poll::Pending
+                } else {
+                    Poll::Ready(Err(err))
+                }
+            }
+        }
     }
 }
 
 /// Construct a demo driver handle
-pub fn driver() -> DemoDriver<'static> {
-    DemoDriver { sq: QUEUES.0.access() }
+pub fn driver() -> DemoDriver {
+    DemoDriver {
+        listener: None,
+    }
 }
 
 /// Access the registrar
@@ -93,13 +103,15 @@ pub fn registrar() -> Option<&'static Registrar<'static>> {
 
 }
 
-fn init() -> (AccessQueue<Mutex<SubmissionQueue<'static>>>, Mutex<CompletionQueue<'static>>, Registrar<'static>) {
+fn init() -> Queues {
     unsafe {
         use std::mem::MaybeUninit;
         static mut RING: MaybeUninit<IoUring> = MaybeUninit::uninit();
-        RING = MaybeUninit::new(IoUring::new(SQ_ENTRIES).expect("TODO handle io_uring_init failure"));
+        let ring = IoUring::new_with_flags(ENTRIES, SetupFlags::empty(), SetupFeatures::NODROP)
+                            .expect("TODO handle io_uring_init failure");
+        RING = MaybeUninit::new(ring);
         let (sq, cq, reg) = (&mut *RING.as_mut_ptr()).queues();
-        (AccessQueue::new(Mutex::new(sq), CQ_ENTRIES), Mutex::new(cq), reg)
+        (Mutex::new(sq), Mutex::new(cq), reg, Event::new())
     }
 }
 
@@ -110,7 +122,7 @@ fn start_completion_thread() {
         let mut cq = QUEUES.1.lock();
         while let Ok(cqe) = cq.wait_for_cqe() {
             let mut ready = cq.ready() as usize + 1;
-            QUEUES.0.release(ready);
+            QUEUES.3.notify_additional(ready);
 
             super::complete(cqe);
             ready -= 1;
@@ -118,7 +130,7 @@ fn start_completion_thread() {
             while let Some(cqe) = cq.peek_for_cqe() {
                 if ready == 0 {
                     ready = cq.ready() as usize + 1;
-                    QUEUES.0.release(ready);
+                    QUEUES.3.notify_additional(ready);
                 }
 
                 super::complete(cqe);

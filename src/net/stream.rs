@@ -18,7 +18,7 @@ use crate::Submission;
 
 use super::socket;
 
-pub struct TcpStream<D: Drive = DemoDriver<'static>> {
+pub struct TcpStream<D: Drive = DemoDriver> {
     ring: Ring<D>,
     buf: Buffer,
     active: Op,
@@ -98,7 +98,7 @@ impl<D: Drive> TcpStream<D> {
     }
 }
 
-pub struct Connect<D: Drive = DemoDriver<'static>>(
+pub struct Connect<D: Drive = DemoDriver>(
     Result<Submission<event::Connect, D>, Option<io::Error>>
 );
 
