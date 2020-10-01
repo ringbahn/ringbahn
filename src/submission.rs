@@ -6,7 +6,7 @@ use std::task::{Context, Poll};
 
 use futures_core::ready;
 
-use crate::{Event, Drive, Ring};
+use crate::{Event, Drive, ring::Ring};
 
 /// A [`Future`] representing an event submitted to io-uring
 pub struct Submission<E: Event, D: Drive> {

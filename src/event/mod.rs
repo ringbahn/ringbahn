@@ -24,7 +24,7 @@ use std::mem::ManuallyDrop;
 
 use iou::{SQE, SQEs};
 
-use crate::cancellation::Cancellation;
+use crate::ring::Cancellation;
 
 pub use accept::Accept;
 pub use close::Close;

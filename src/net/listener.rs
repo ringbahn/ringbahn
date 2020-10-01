@@ -9,9 +9,8 @@ use futures_core::{ready, Stream};
 use iou::sqe::SockAddrStorage;
 use nix::sys::socket::{self as nix_socket, SockProtocol, SockFlag};
 
-use crate::drive::demo::DemoDriver;
-use crate::Cancellation;
-use crate::{Drive, Ring};
+use crate::drive::{Drive, demo::DemoDriver};
+use crate::ring::{Cancellation, Ring};
 
 use super::TcpStream;
 
