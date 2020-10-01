@@ -3,6 +3,10 @@ use std::ffi::CString;
 use std::mem;
 use std::ptr;
 
+use either::Either;
+
+use crate::buf::Buffer;
+
 /// A cancellation callback to clean up resources when IO gets cancelled.
 ///
 /// When a user cancels interest in an event, the future representing that event needs to be
@@ -105,6 +109,7 @@ unsafe impl<T: CancelNarrow, U: CancelNarrow> Cancel for (T, U) {
     }
 }
 
+
 impl Cancellation {
     fn new<T: Cancel>(object: T) -> Cancellation {
         let (data, metadata) = object.into_raw();
@@ -121,6 +126,18 @@ impl<T: Cancel> From<T> for Cancellation {
 impl<T> From<Option<T>> for Cancellation where Cancellation: From<T> {
     fn from(object: Option<T>) -> Cancellation {
         object.map_or(Cancellation::new(()), Cancellation::from)
+    }
+}
+
+impl From<Buffer> for Cancellation {
+    fn from(buffer: Buffer) -> Cancellation {
+        Cancellation::from(buffer.into_boxed_slice())
+    }
+}
+
+impl<T, U> From<Either<T, U>> for Cancellation where Cancellation: From<T> + From<U> {
+    fn from(object: Either<T, U>) -> Cancellation {
+        object.either(Cancellation::from, Cancellation::from)
     }
 }
 

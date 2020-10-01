@@ -54,7 +54,7 @@ impl<D: Drive + Clone> TcpStream<D> {
 impl<D: Drive> TcpStream<D> {
     pub(crate) fn from_fd(fd: RawFd, ring: Ring<D>) -> TcpStream<D> {
         TcpStream {
-            buf: Buffer::new(),
+            buf: Buffer::default(),
             active: Op::Nothing,
             fd, ring,
         }
