@@ -1,6 +1,5 @@
 use std::io;
 use std::mem::{self, ManuallyDrop};
-use std::ptr;
 use std::task::Waker;
 
 use parking_lot::Mutex;
@@ -85,28 +84,37 @@ impl Completion {
             _               => unreachable!()
         }
     }
-}
 
-pub fn complete(cqe: CQE) {
-    let result = cqe.result();
-    let completion = cqe.user_data() as *mut Mutex<State>;
-
-    if completion != ptr::null_mut() {
-        let state: &Mutex<State> = unsafe { &*completion };
-        let mut state = state.lock();
+    fn complete(self, result: io::Result<u32>) {
+        let mut state = self.state.lock();
         match mem::replace(&mut *state, State::Empty) {
             Submitted(waker)    => {
                 *state = Completed(result);
                 waker.wake();
             }
             Cancelled(callback) => {
-                unsafe {
-                    drop(callback);
-                    drop(state);
-                    drop(Box::from_raw(completion));
-                }
+                drop(callback);
+                drop(state);
+                drop(ManuallyDrop::into_inner(self.state));
             }
             _                   => unreachable!()
         }
     }
+}
+
+pub fn complete(cqe: CQE) {
+    unsafe {
+        let result = cqe.result();
+        let user_data = cqe.user_data();
+        // iou should never raise LIBURING_UDATA_TIMEOUTs, this is just to catch bugs in iou
+        debug_assert!(user_data != uring_sys::LIBURING_UDATA_TIMEOUT);
+        let state = user_data as *mut Mutex<State>;
+
+        if !state.is_null() {
+            let completion = Completion {
+                state: ManuallyDrop::new(Box::from_raw(state))
+            };
+            completion.complete(result);
+        }
+    };
 }
