@@ -2,7 +2,7 @@
 
 use std::fs;
 use std::future::Future;
-use std::io;
+use std::io::{self, IoSlice};
 use std::mem::{self, ManuallyDrop};
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 use std::path::Path;
@@ -36,6 +36,7 @@ pub struct File<D: Drive = DemoDriver> {
 enum Op {
     Read,
     Write,
+    WriteV,
     Close,
     Nothing,
     Statx,
@@ -232,6 +233,22 @@ impl<D: Drive> AsyncWrite for File<D> {
         }))?;
         *pos += n as u64;
         buf.clear();
+        Poll::Ready(Ok(n as usize))
+    }
+
+    fn poll_write_vectored(mut self: Pin<&mut Self>, ctx: &mut Context<'_>, bufs: &[IoSlice<'_>])
+        -> Poll<io::Result<usize>>
+    {
+        self.as_mut().guard_op(Op::WriteV);
+        let fd = self.fd;
+        let n = ready!(self.as_mut().ring().poll(ctx, 1, |sqs| {
+            let mut sqe = sqs.single().unwrap();
+            unsafe {
+                sqe.prep_write_vectored(fd, bufs, 0);
+            }
+            sqe
+        }))?;
+        *self.pos() += n as u64;
         Poll::Ready(Ok(n as usize))
     }
 

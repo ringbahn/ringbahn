@@ -1,4 +1,4 @@
-use std::io::SeekFrom;
+use std::io::{IoSlice, SeekFrom};
 
 use futures::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 
@@ -13,6 +13,25 @@ fn write_file() {
     futures::executor::block_on(async move {
         assert_eq!(file.write(ASSERT).await.unwrap(), ASSERT.len());
 
+        let mut buf = vec![];
+        assert!(file.seek(SeekFrom::Start(0)).await.is_ok());
+        assert_eq!(file.read_to_end(&mut buf).await.unwrap(), ASSERT.len());
+        assert_eq!(&buf[0..ASSERT.len()], ASSERT);
+    });
+}
+
+#[test]
+fn writev_file() {
+    let file = tempfile::tempfile().unwrap();
+    let mut file = File::from(file);
+    let bufs = &[
+        IoSlice::new(&ASSERT[0..4]),
+        IoSlice::new(&ASSERT[4..9]),
+        IoSlice::new(&ASSERT[9..]),
+    ];
+
+    futures::executor::block_on(async move {
+        assert_eq!(file.write_vectored(bufs).await.unwrap(), ASSERT.len());
         let mut buf = vec![];
         assert!(file.seek(SeekFrom::Start(0)).await.is_ok());
         assert_eq!(file.read_to_end(&mut buf).await.unwrap(), ASSERT.len());
