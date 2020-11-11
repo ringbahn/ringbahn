@@ -116,7 +116,7 @@ pub struct Stdout<D: Drive> {
     buf: Buffer,
 }
 
-/// Constructs a new handle to the standard output of the current process using the demo driver.
+/// Constructs a new `stdout` handle run on the demo driver.
 /// ```no_run
 /// use ringbahn::io;
 ///
@@ -129,17 +129,18 @@ pub struct Stdout<D: Drive> {
 /// ```
 // TODO synchronization note?
 pub fn stdout() -> Stdout<DemoDriver> {
-    Stdout::run_on_driver(DemoDriver::default())
+    stdout_on_driver(DemoDriver::default())
+}
+
+/// Constructs a new `stdout` handle run on the provided driver.
+pub fn stdout_on_driver<D: Drive>(driver: D) -> Stdout<D> {
+    Stdout {
+        ring: Ring::new(driver),
+        buf: Buffer::default(),
+    }
 }
 
 impl<D: Drive> Stdout<D> {
-    pub fn run_on_driver(driver: D) -> Stdout<D> {
-        Stdout {
-            ring: Ring::new(driver),
-            buf: Buffer::default(),
-        }
-    }
-
     #[inline(always)]
     fn split(self: Pin<&mut Self>) -> (Pin<&mut Ring<D>>, &mut Buffer) {
         unsafe {
