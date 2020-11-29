@@ -1,13 +1,16 @@
 use std::borrow::Cow;
 use std::future::Future;
 use std::io;
-use std::os::unix::io::RawFd;
+use std::os::unix::io::{AsRawFd, RawFd};
 use std::pin::Pin;
 use std::task::{Poll, Context};
 
 use futures_core::ready;
+use futures_io::AsyncWrite;
 
+use crate::buf::Buffer;
 use crate::{Drive, ring::Ring};
+use crate::drive::demo::DemoDriver;
 
 #[macro_export]
 macro_rules! print {
@@ -104,5 +107,81 @@ impl<D: Drive> Future for Print<D> {
         } else {
             return Poll::Ready(Ok(()));
         }
+    }
+}
+
+/// A handle to the standard output of the current process.
+pub struct Stdout<D: Drive> {
+    ring: Ring<D>,
+    buf: Buffer,
+}
+
+/// Constructs a new `stdout` handle run on the demo driver.
+/// ```no_run
+/// use ringbahn::io;
+///
+/// # use futures::AsyncWriteExt;
+/// # fn main() -> std::io::Result<()> { futures::executor::block_on(async {
+/// io::stdout().write(b"hello, world").await?;
+/// # Ok(())
+/// # })
+/// # }
+/// ```
+// TODO synchronization note?
+pub fn stdout() -> Stdout<DemoDriver> {
+    stdout_on_driver(DemoDriver::default())
+}
+
+/// Constructs a new `stdout` handle run on the provided driver.
+pub fn stdout_on_driver<D: Drive>(driver: D) -> Stdout<D> {
+    Stdout {
+        ring: Ring::new(driver),
+        buf: Buffer::default(),
+    }
+}
+
+impl<D: Drive> Stdout<D> {
+    #[inline(always)]
+    fn split(self: Pin<&mut Self>) -> (Pin<&mut Ring<D>>, &mut Buffer) {
+        unsafe {
+            let this = Pin::get_unchecked_mut(self);
+            (Pin::new_unchecked(&mut this.ring), &mut this.buf)
+        }
+    }
+}
+
+impl<D: Drive> AsyncWrite for Stdout<D> {
+    fn poll_write(self: Pin<&mut Self>, ctx: &mut Context<'_>, slice: &[u8])
+        -> Poll<io::Result<usize>>
+    {
+        let fd = self.as_raw_fd();
+        let (ring, buf, ..) = self.split();
+        let data = ready!(buf.fill_buf(|mut buf| {
+            Poll::Ready(Ok(io::Write::write(&mut buf, slice)? as u32))
+        }))?;
+        let n = ready!(ring.poll(ctx, 1, |sqs| {
+            let mut sqe = sqs.single().unwrap();
+            unsafe {
+                sqe.prep_write(fd, data, 0);
+            }
+            sqe
+        }))?;
+        buf.clear();
+        Poll::Ready(Ok(n as usize))
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        ready!(self.poll_write(ctx, &[]))?;
+        Poll::Ready(Ok(()))
+    }
+
+    fn poll_close(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        self.poll_flush(ctx)
+    }
+}
+
+impl<D: Drive> AsRawFd for Stdout<D> {
+    fn as_raw_fd(&self) -> RawFd {
+        libc::STDOUT_FILENO
     }
 }

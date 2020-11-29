@@ -6,7 +6,6 @@ pub mod drive;
 pub mod event;
 pub mod ring;
 
-#[doc(hidden)]
 pub mod io;
 
 mod buf;
