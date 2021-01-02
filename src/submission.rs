@@ -8,7 +8,8 @@ use futures_core::ready;
 
 use crate::{ring::Ring, Drive, Event};
 
-/// A [`Future`] representing an event submitted to io-uring
+/// A [`Future`](https://doc.rust-lang.org/std/future/trait.Future.html) representing an event
+/// submitted to io-uring.
 pub struct Submission<E: Event, D: Drive> {
     ring: Ring<D>,
     event: Option<E>,
@@ -23,11 +24,12 @@ impl<E: Event, D: Drive> Submission<E, D> {
         }
     }
 
-    /// Access the driver this submission is using
+    /// Access the driver this submission is using.
     pub fn driver(&self) -> &D {
         self.ring.driver()
     }
 
+    /// Replace the event associated with this submission.
     pub fn replace_event(self: Pin<&mut Self>, event: E) {
         let (ring, event_slot) = self.split();
         if let Some(event) = event_slot.take() {

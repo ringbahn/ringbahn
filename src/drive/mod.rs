@@ -78,6 +78,7 @@ pub trait Drive {
     /// the submission step is complete, whether or not actual IO was performed by the driver.
     fn poll_submit(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<io::Result<u32>>;
 
+    /// Create a [`Submission`](crate::Submission) object for the `event`.
     fn submit<E: Event>(self, event: E) -> Submission<E, Self>
     where
         Self: Sized,

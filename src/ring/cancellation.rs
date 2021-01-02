@@ -30,6 +30,10 @@ pub unsafe trait Cancel {
     ///   is set to None in this case.
     /// - the cancelled event has been processed by the kernel. The 'result' parameter contains
     ///   the `CQE::result()` returned from the kernel.
+    ///
+    /// ## Safety
+    /// Caller needs to ensure that data and metadata are produced by
+    /// [`Cancel::into_raw`](Cacnel::into_raw).
     unsafe fn handle(data: *mut (), metadata: usize, result: Option<io::Result<u32>>);
 }
 

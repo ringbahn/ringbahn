@@ -14,6 +14,7 @@ pub struct ReadVectored<FD = RawFd> {
 }
 
 impl<FD> ReadVectored<FD> {
+    #[allow(clippy::wrong_self_convention)]
     fn as_iovecs(buffers: &mut [Box<[u8]>]) -> &mut [IoSliceMut] {
         // Unsafe contract:
         // This pointer cast is defined behaviour because Box<[u8]> (wide pointer)

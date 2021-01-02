@@ -13,7 +13,7 @@ pub struct Connect<FD = RawFd> {
 
 impl<FD: UringFd + Copy> Event for Connect<FD> {
     unsafe fn prepare(&mut self, sqe: &mut SQE) {
-        sqe.prep_connect(self.fd, &mut *self.addr);
+        sqe.prep_connect(self.fd, &*self.addr);
     }
 
     fn cancel(this: ManuallyDrop<Self>) -> Cancellation {

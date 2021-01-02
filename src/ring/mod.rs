@@ -16,7 +16,7 @@ pub(crate) use completion::Completion;
 
 use State::*;
 
-/// A low-level primitive for building an IO object on io-uring
+/// A low-level primitive for building an IO object on io-uring.
 ///
 /// Ring is a state machine similar to `Submission`, but it is designed to cycle through multiple
 /// IO events submitted to io-uring, rather than representing a single submission. Because of this,
@@ -63,6 +63,7 @@ impl<D: Drive> Ring<D> {
         }
     }
 
+    /// Access the driver this ring is using.
     pub fn driver(&self) -> &D {
         &self.driver
     }

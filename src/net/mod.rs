@@ -22,9 +22,10 @@ fn socket<A: ToSocketAddrs>(
     );
 
     for addr in addr.to_socket_addrs()? {
-        let domain = match addr.is_ipv6() {
-            true => nix::AddressFamily::Inet6,
-            false => nix::AddressFamily::Inet,
+        let domain = if addr.is_ipv6() {
+            nix::AddressFamily::Inet6
+        } else {
+            nix::AddressFamily::Inet
         };
 
         let flags = nix::SockFlag::SOCK_CLOEXEC;

@@ -50,7 +50,7 @@ pub use writev::WriteVectored;
 ///
 /// ## Safety
 ///
-/// Event is a safe trait with two unsafe methods. It's important to understand that when
+/// Event is a safe trait with one unsafe method. It's important to understand that when
 /// implementing an unsafe method, the code author implementing that method is allowed to assume
 /// certain additional invariants will be upheld by all callers. It is the caller's responsibility
 /// to ensure those invariants are upheld, not the implementer. However, any unsafe operations

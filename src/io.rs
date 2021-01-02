@@ -113,7 +113,7 @@ impl<D: Drive> Future for Print<D> {
                 }
             }
         } else {
-            return Poll::Ready(Ok(()));
+            Poll::Ready(Ok(()))
         }
     }
 }

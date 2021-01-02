@@ -14,7 +14,7 @@ use State::*;
 /// is shared between the Completion type and the io-uring instance (the address of the object is
 /// passed as a user_data field with the event's SQE).
 ///
-/// Therefore, it requires a fair amout of unsafe code and synchronization to properly manage the
+/// Therefore, it requires a fair amount of unsafe code and synchronization to properly manage the
 /// lifecycle of this object. That code is encapsulated here inside a safe API for the rest of
 /// ringbahn to use.
 ///
