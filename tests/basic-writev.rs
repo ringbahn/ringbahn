@@ -1,9 +1,9 @@
-use std::io::Read; 
+use std::io::Read;
 use std::os::unix::io::AsRawFd;
 
-use ringbahn::Submission;
-use ringbahn::event::WriteVectored;
 use ringbahn::drive::demo;
+use ringbahn::event::WriteVectored;
+use ringbahn::Submission;
 
 const ASSERT: &[u8] = b"But this formidable power of death -";
 

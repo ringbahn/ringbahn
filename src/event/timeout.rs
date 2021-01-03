@@ -1,7 +1,7 @@
 use std::mem::ManuallyDrop;
 use std::time::Duration;
 
-use super::{Event, SQE, SQEs, Cancellation};
+use super::{Cancellation, Event, SQEs, SQE};
 
 use iou::sqe::TimeoutFlags;
 
@@ -15,13 +15,16 @@ impl StaticTimeout {
     pub const fn new(duration: Duration, events: u32, flags: TimeoutFlags) -> StaticTimeout {
         StaticTimeout {
             ts: timespec(duration),
-            events, flags,
+            events,
+            flags,
         }
     }
 }
 
 impl Event for &'static StaticTimeout {
-    fn sqes_needed(&self) -> u32 { 1 }
+    fn sqes_needed(&self) -> u32 {
+        1
+    }
 
     unsafe fn prepare<'sq>(&mut self, sqs: &mut SQEs<'sq>) -> SQE<'sq> {
         let mut sqe = sqs.single().unwrap();
@@ -40,13 +43,16 @@ impl Timeout {
     pub fn new(duration: Duration, events: u32, flags: TimeoutFlags) -> Timeout {
         Timeout {
             ts: Box::new(timespec(duration)),
-            events, flags,
+            events,
+            flags,
         }
     }
 }
 
 impl Event for Timeout {
-    fn sqes_needed(&self) -> u32 { 1 }
+    fn sqes_needed(&self) -> u32 {
+        1
+    }
 
     unsafe fn prepare<'sq>(&mut self, sqs: &mut SQEs<'sq>) -> SQE<'sq> {
         let mut sqe = sqs.single().unwrap();

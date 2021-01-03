@@ -2,8 +2,8 @@ use ringbahn::net::TcpStream;
 
 use std::io::{self, BufRead, Write};
 
-use futures::io::{AsyncBufReadExt, AsyncWriteExt};
 use futures::executor::block_on;
+use futures::io::{AsyncBufReadExt, AsyncWriteExt};
 
 fn main() {
     block_on(async move {

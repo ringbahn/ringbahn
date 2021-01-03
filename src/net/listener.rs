@@ -1,15 +1,15 @@
-use std::io;
 use std::future::Future;
-use std::net::{ToSocketAddrs, SocketAddr};
-use std::os::unix::io::{RawFd};
+use std::io;
+use std::net::{SocketAddr, ToSocketAddrs};
+use std::os::unix::io::RawFd;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use futures_core::{ready, Stream};
 use iou::sqe::SockAddrStorage;
-use nix::sys::socket::{self as nix_socket, SockProtocol, SockFlag};
+use nix::sys::socket::{self as nix_socket, SockFlag, SockProtocol};
 
-use crate::drive::{Drive, demo::DemoDriver};
+use crate::drive::{demo::DemoDriver, Drive};
 use crate::ring::{Cancellation, Ring};
 
 use super::TcpStream;
@@ -47,11 +47,15 @@ impl<D: Drive> TcpListener<D> {
         Ok(TcpListener {
             active: Op::Nothing,
             addr: None,
-            fd, ring,
+            fd,
+            ring,
         })
     }
 
-    pub fn close(&mut self) -> Close<D> where D: Unpin {
+    pub fn close(&mut self) -> Close<D>
+    where
+        D: Unpin,
+    {
         Pin::new(self).close_pinned()
     }
 
@@ -71,9 +75,9 @@ impl<D: Drive> TcpListener<D> {
 
     fn cancel(&mut self) {
         let cancellation = match self.active {
-            Op::Accept  => Cancellation::from(self.addr.take()),
-            Op::Close   => Cancellation::from(()),
-            Op::Closed  => return,
+            Op::Accept => Cancellation::from(self.addr.take()),
+            Op::Close => Cancellation::from(()),
+            Op::Closed => return,
             Op::Nothing => return,
         };
         self.active = Op::Nothing;
@@ -88,18 +92,24 @@ impl<D: Drive> TcpListener<D> {
         self.split().0
     }
 
-    fn split(self: Pin<&mut Self>) 
-        -> (Pin<&mut Ring<D>>, &mut Option<Box<SockAddrStorage>>, &mut Op)
-    {
+    fn split(
+        self: Pin<&mut Self>,
+    ) -> (
+        Pin<&mut Ring<D>>,
+        &mut Option<Box<SockAddrStorage>>,
+        &mut Op,
+    ) {
         unsafe {
             let this = Pin::get_unchecked_mut(self);
-            (Pin::new_unchecked(&mut this.ring), &mut this.addr, &mut this.active)
+            (
+                Pin::new_unchecked(&mut this.ring),
+                &mut this.addr,
+                &mut this.active,
+            )
         }
     }
 
-    fn split_with_addr(self: Pin<&mut Self>)
-        -> (Pin<&mut Ring<D>>, &mut SockAddrStorage, &mut Op)
-    {
+    fn split_with_addr(self: Pin<&mut Self>) -> (Pin<&mut Ring<D>>, &mut SockAddrStorage, &mut Op) {
         let (ring, addr, active) = self.split();
         if addr.is_none() {
             *addr = Some(Box::new(SockAddrStorage::uninit()));
@@ -113,7 +123,10 @@ impl<D: Drive> TcpListener<D> {
 }
 
 impl<D: Drive + Clone> TcpListener<D> {
-    pub fn accept(&mut self) -> Accept<'_, D> where D: Unpin {
+    pub fn accept(&mut self) -> Accept<'_, D>
+    where
+        D: Unpin,
+    {
         Pin::new(self).accept_pinned()
     }
 
@@ -121,15 +134,23 @@ impl<D: Drive + Clone> TcpListener<D> {
         Accept { socket: self }
     }
 
-    pub fn incoming(&mut self) -> Incoming<'_, D> where D: Unpin {
+    pub fn incoming(&mut self) -> Incoming<'_, D>
+    where
+        D: Unpin,
+    {
         Pin::new(self).incoming_pinned()
     }
 
     pub fn incoming_pinned(self: Pin<&mut Self>) -> Incoming<'_, D> {
-        Incoming { accept: self.accept_pinned() }
+        Incoming {
+            accept: self.accept_pinned(),
+        }
     }
 
-    pub fn accept_no_addr(&mut self) -> AcceptNoAddr<'_, D> where D: Unpin {
+    pub fn accept_no_addr(&mut self) -> AcceptNoAddr<'_, D>
+    where
+        D: Unpin,
+    {
         Pin::new(self).accept_no_addr_pinned()
     }
 
@@ -137,17 +158,23 @@ impl<D: Drive + Clone> TcpListener<D> {
         AcceptNoAddr { socket: self }
     }
 
-    pub fn incoming_no_addr(&mut self) -> IncomingNoAddr<'_, D> where D: Unpin {
+    pub fn incoming_no_addr(&mut self) -> IncomingNoAddr<'_, D>
+    where
+        D: Unpin,
+    {
         Pin::new(self).incoming_no_addr_pinned()
     }
 
     pub fn incoming_no_addr_pinned(self: Pin<&mut Self>) -> IncomingNoAddr<'_, D> {
-        IncomingNoAddr { accept: self.accept_no_addr_pinned() }
+        IncomingNoAddr {
+            accept: self.accept_no_addr_pinned(),
+        }
     }
 
-    pub fn poll_accept(mut self: Pin<&mut Self>, ctx: &mut Context<'_>)
-        -> Poll<io::Result<(TcpStream<D>, SocketAddr)>>
-    {
+    pub fn poll_accept(
+        mut self: Pin<&mut Self>,
+        ctx: &mut Context<'_>,
+    ) -> Poll<io::Result<(TcpStream<D>, SocketAddr)>> {
         self.as_mut().guard_op(Op::Accept);
         let fd = self.fd;
         let (ring, addr, ..) = self.as_mut().split_with_addr();
@@ -170,9 +197,10 @@ impl<D: Drive + Clone> TcpListener<D> {
         Poll::Ready(Ok((TcpStream::from_fd(fd, self.ring().clone()), addr)))
     }
 
-    pub fn poll_accept_no_addr(mut self: Pin<&mut Self>, ctx: &mut Context<'_>)
-        -> Poll<io::Result<TcpStream<D>>>
-    {
+    pub fn poll_accept_no_addr(
+        mut self: Pin<&mut Self>,
+        ctx: &mut Context<'_>,
+    ) -> Poll<io::Result<TcpStream<D>>> {
         self.as_mut().guard_op(Op::Accept);
         let fd = self.fd;
         let fd = ready!(self.as_mut().ring().poll(ctx, 1, |sqs| {
@@ -189,9 +217,11 @@ impl<D: Drive + Clone> TcpListener<D> {
 impl<D: Drive> Drop for TcpListener<D> {
     fn drop(&mut self) {
         match self.active {
-            Op::Closed  => { }
-            Op::Nothing => unsafe { libc::close(self.fd); }
-            _           => self.cancel(),
+            Op::Closed => {}
+            Op::Nothing => unsafe {
+                libc::close(self.fd);
+            },
+            _ => self.cancel(),
         }
     }
 }

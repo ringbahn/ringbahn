@@ -3,7 +3,7 @@ use std::os::unix::io::RawFd;
 use iou::registrar::UringFd;
 use iou::sqe::FsyncFlags;
 
-use super::{Event, SQE, SQEs};
+use super::{Event, SQEs, SQE};
 
 pub struct Fsync<FD = RawFd> {
     pub fd: FD,
@@ -11,7 +11,9 @@ pub struct Fsync<FD = RawFd> {
 }
 
 impl<FD: UringFd + Copy> Event for Fsync<FD> {
-    fn sqes_needed(&self) -> u32 { 1 }
+    fn sqes_needed(&self) -> u32 {
+        1
+    }
 
     unsafe fn prepare<'sq>(&mut self, sqs: &mut SQEs<'sq>) -> SQE<'sq> {
         let mut sqe = sqs.single().unwrap();

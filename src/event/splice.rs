@@ -2,7 +2,7 @@ use std::os::unix::io::RawFd;
 
 use iou::sqe::SpliceFlags;
 
-use super::{Event, SQE, SQEs};
+use super::{Event, SQEs, SQE};
 
 pub struct Splice {
     pub fd_in: RawFd,
@@ -14,11 +14,20 @@ pub struct Splice {
 }
 
 impl Event for Splice {
-    fn sqes_needed(&self) -> u32 { 1 }
+    fn sqes_needed(&self) -> u32 {
+        1
+    }
 
     unsafe fn prepare<'sq>(&mut self, sqs: &mut SQEs<'sq>) -> SQE<'sq> {
         let mut sqe = sqs.single().unwrap();
-        sqe.prep_splice(self.fd_in, self.off_in, self.fd_out, self.off_out, self.bytes, self.flags);
+        sqe.prep_splice(
+            self.fd_in,
+            self.off_in,
+            self.fd_out,
+            self.off_out,
+            self.bytes,
+            self.flags,
+        );
         sqe
     }
 }

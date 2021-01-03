@@ -11,14 +11,14 @@ use std::task::{Context, Poll};
 
 use either::Either;
 use futures_core::ready;
-use futures_io::{AsyncRead, AsyncBufRead, AsyncWrite, AsyncSeek};
-use iou::sqe::{OFlag, Mode};
+use futures_io::{AsyncBufRead, AsyncRead, AsyncSeek, AsyncWrite};
+use iou::sqe::{Mode, OFlag};
 
 use crate::buf::Buffer;
-use crate::drive::Drive;
 use crate::drive::demo::DemoDriver;
-use crate::ring::{Ring, Cancellation};
+use crate::drive::Drive;
 use crate::event::OpenAt;
+use crate::ring::{Cancellation, Ring};
 use crate::Submission;
 
 type FileBuf = Either<Buffer, Box<libc::statx>>;
@@ -58,13 +58,21 @@ impl<D: Drive + Clone> File<D> {
     /// Open a file
     pub fn open_on_driver(path: impl AsRef<Path>, driver: D) -> Open<D> {
         let flags = OFlag::O_CLOEXEC | OFlag::O_RDONLY;
-        Open(driver.submit(OpenAt::without_dir(path, flags, Mode::from_bits(0o666).unwrap())))
+        Open(driver.submit(OpenAt::without_dir(
+            path,
+            flags,
+            Mode::from_bits(0o666).unwrap(),
+        )))
     }
 
     /// Create a file
     pub fn create_on_driver(path: impl AsRef<Path>, driver: D) -> Create<D> {
         let flags = OFlag::O_CLOEXEC | OFlag::O_WRONLY | OFlag::O_CREAT | OFlag::O_TRUNC;
-        Create(driver.submit(OpenAt::without_dir(path, flags, Mode::from_bits(0o666).unwrap())))
+        Create(driver.submit(OpenAt::without_dir(
+            path,
+            flags,
+            Mode::from_bits(0o666).unwrap(),
+        )))
     }
 }
 
@@ -93,7 +101,9 @@ impl<D: Drive> File<D> {
     pub fn read_buffered(&self) -> &[u8] {
         if self.active == Op::Read {
             self.buf.as_ref().unwrap_left().buffered_from_read()
-        } else { &[] }
+        } else {
+            &[]
+        }
     }
 
     fn guard_op(self: Pin<&mut Self>, op: Op) {
@@ -110,7 +120,8 @@ impl<D: Drive> File<D> {
     fn cancel(&mut self) {
         self.active = Op::Nothing;
         let new_buf = Either::Left(Buffer::default());
-        self.ring.cancel(Cancellation::from(mem::replace(&mut self.buf, new_buf)));
+        self.ring
+            .cancel(Cancellation::from(mem::replace(&mut self.buf, new_buf)));
     }
 
     fn poll_file_size(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<io::Result<u64>> {
@@ -136,23 +147,26 @@ impl<D: Drive> File<D> {
     fn split(self: Pin<&mut Self>) -> (Pin<&mut Ring<D>>, &mut FileBuf, &mut u64, &mut Op) {
         unsafe {
             let this = Pin::get_unchecked_mut(self);
-            (Pin::new_unchecked(&mut this.ring), &mut this.buf, &mut this.pos, &mut this.active)
+            (
+                Pin::new_unchecked(&mut this.ring),
+                &mut this.buf,
+                &mut this.pos,
+                &mut this.active,
+            )
         }
     }
 
     #[inline(always)]
-    fn split_with_buf(self: Pin<&mut Self>)
-        -> (Pin<&mut Ring<D>>, &mut Buffer, &mut u64, &mut Op)
-    {
+    fn split_with_buf(self: Pin<&mut Self>) -> (Pin<&mut Ring<D>>, &mut Buffer, &mut u64, &mut Op) {
         let (ring, buf, pos, active) = self.split();
         let buf = buf.as_mut().unwrap_left();
         (ring, buf, pos, active)
     }
 
     #[inline(always)]
-    fn split_with_statx(self: Pin<&mut Self>)
-        -> (Pin<&mut Ring<D>>, &mut libc::statx, &mut u64, &mut Op)
-    {
+    fn split_with_statx(
+        self: Pin<&mut Self>,
+    ) -> (Pin<&mut Ring<D>>, &mut libc::statx, &mut u64, &mut Op) {
         let (ring, buf, pos, active) = self.split();
         if buf.is_left() {
             *buf = Either::Right(Box::new(unsafe { mem::zeroed() }));
@@ -182,9 +196,11 @@ impl<D: Drive> File<D> {
 }
 
 impl<D: Drive> AsyncRead for File<D> {
-    fn poll_read(mut self: Pin<&mut Self>, ctx: &mut Context<'_>, buf: &mut [u8])
-        -> Poll<io::Result<usize>>
-    {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        ctx: &mut Context<'_>,
+        buf: &mut [u8],
+    ) -> Poll<io::Result<usize>> {
         let mut inner = ready!(self.as_mut().poll_fill_buf(ctx))?;
         let len = io::Read::read(&mut inner, buf)?;
         self.consume(len);
@@ -216,13 +232,18 @@ impl<D: Drive> AsyncBufRead for File<D> {
 }
 
 impl<D: Drive> AsyncWrite for File<D> {
-    fn poll_write(mut self: Pin<&mut Self>, ctx: &mut Context<'_>, slice: &[u8]) -> Poll<io::Result<usize>> {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        ctx: &mut Context<'_>,
+        slice: &[u8],
+    ) -> Poll<io::Result<usize>> {
         self.as_mut().guard_op(Op::Write);
         let fd = self.fd;
         let (ring, buf, pos, ..) = self.split_with_buf();
-        let data = ready!(buf.fill_buf(|mut buf| {
-            Poll::Ready(Ok(io::Write::write(&mut buf, slice)? as u32))
-        }))?;
+        let data =
+            ready!(buf.fill_buf(|mut buf| {
+                Poll::Ready(Ok(io::Write::write(&mut buf, slice)? as u32))
+            }))?;
         let n = ready!(ring.poll(ctx, 1, |sqs| {
             let mut sqe = sqs.single().unwrap();
             unsafe {
@@ -256,18 +277,18 @@ impl<D: Drive> AsyncWrite for File<D> {
 }
 
 impl<D: Drive> AsyncSeek for File<D> {
-    fn poll_seek(mut self: Pin<&mut Self>, ctx: &mut Context, pos: io::SeekFrom)
-        -> Poll<io::Result<u64>>
-    {
+    fn poll_seek(
+        mut self: Pin<&mut Self>,
+        ctx: &mut Context,
+        pos: io::SeekFrom,
+    ) -> Poll<io::Result<u64>> {
         let (whence, offset) = match pos {
             io::SeekFrom::Start(n) => {
                 *self.as_mut().pos() = n;
                 return Poll::Ready(Ok(self.pos));
             }
             io::SeekFrom::Current(n) => (self.pos, n),
-            io::SeekFrom::End(n)     => {
-                (ready!(self.as_mut().poll_file_size(ctx))?, n)
-            }
+            io::SeekFrom::End(n) => (ready!(self.as_mut().poll_file_size(ctx))?, n),
         };
         let valid_seek = if offset.is_negative() {
             match whence.checked_sub(offset.abs() as u64) {
@@ -301,18 +322,18 @@ impl<D: Drive> From<File<D>> for fs::File {
     fn from(mut file: File<D>) -> fs::File {
         file.cancel();
         let file = ManuallyDrop::new(file);
-        unsafe {
-            fs::File::from_raw_fd(file.fd)
-        }
+        unsafe { fs::File::from_raw_fd(file.fd) }
     }
 }
 
 impl<D: Drive> Drop for File<D> {
     fn drop(&mut self) {
         match self.active {
-            Op::Closed  => { }
-            Op::Nothing => unsafe { libc::close(self.fd); },
-            _           => self.cancel(),
+            Op::Closed => {}
+            Op::Nothing => unsafe {
+                libc::close(self.fd);
+            },
+            _ => self.cancel(),
         }
     }
 }

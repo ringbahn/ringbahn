@@ -4,7 +4,7 @@ use std::future::Future;
 use std::io;
 use std::pin::Pin;
 use std::sync::Once;
-use std::task::{Poll, Context};
+use std::task::{Context, Poll};
 use std::thread;
 
 use event_listener::*;
@@ -12,9 +12,9 @@ use futures_core::ready;
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 
-const ENTRIES: u32   = 32;
+const ENTRIES: u32 = 32;
 
-use super::{Drive, Completion};
+use super::{Completion, Drive};
 
 use iou::*;
 
@@ -33,9 +33,11 @@ pub struct DemoDriver {
 }
 
 impl DemoDriver {
-    fn poll_submit_inner(&mut self, ctx: &mut Context<'_>, sq: &mut SubmissionQueue<'_>)
-        -> Poll<io::Result<u32>>
-    {
+    fn poll_submit_inner(
+        &mut self,
+        ctx: &mut Context<'_>,
+        sq: &mut SubmissionQueue<'_>,
+    ) -> Poll<io::Result<u32>> {
         start_completion_thread();
 
         if let Some(listener) = &mut self.listener {
@@ -43,8 +45,8 @@ impl DemoDriver {
         }
 
         match sq.submit() {
-            Ok(n)       => Poll::Ready(Ok(n)),
-            Err(err)    => {
+            Ok(n) => Poll::Ready(Ok(n)),
+            Err(err) => {
                 if err.raw_os_error().map_or(false, |code| code == libc::EBUSY) {
                     self.listener = Some(QUEUES.3.listen());
                     Poll::Pending
@@ -78,27 +80,22 @@ impl Drive for DemoDriver {
         let mut sq = QUEUES.0.lock();
         loop {
             match sq.prepare_sqes(count) {
-                Some(sqs)   => return Poll::Ready(prepare(sqs, ctx)),
-                None        => {
+                Some(sqs) => return Poll::Ready(prepare(sqs, ctx)),
+                None => {
                     let _ = ready!(self.poll_submit_inner(ctx, &mut *sq));
                 }
             }
         }
     }
 
-    fn poll_submit(
-        mut self: Pin<&mut Self>,
-        ctx: &mut Context<'_>,
-    ) -> Poll<io::Result<u32>> {
+    fn poll_submit(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<io::Result<u32>> {
         self.poll_submit_inner(ctx, &mut *QUEUES.0.lock())
     }
 }
 
 /// Construct a demo driver handle
 pub fn driver() -> DemoDriver {
-    DemoDriver {
-        listener: None,
-    }
+    DemoDriver { listener: None }
 }
 
 /// Access the registrar
@@ -111,7 +108,6 @@ pub fn registrar() -> Option<&'static Registrar<'static>> {
     } else {
         None
     }
-
 }
 
 fn init() -> Queues {
@@ -126,26 +122,28 @@ fn init() -> Queues {
 static STARTED_COMPLETION_THREAD: Once = Once::new();
 
 fn start_completion_thread() {
-    STARTED_COMPLETION_THREAD.call_once(|| { thread::spawn(move || {
-        let mut cq = QUEUES.1.lock();
-        while let Ok(cqe) = cq.wait_for_cqe() {
-            let mut ready = cq.ready() as usize + 1;
-            QUEUES.3.notify_additional(ready);
-
-            super::complete(cqe);
-            ready -= 1;
-
-            while let Some(cqe) = cq.peek_for_cqe() {
-                if ready == 0 {
-                    ready = cq.ready() as usize + 1;
-                    QUEUES.3.notify_additional(ready);
-                }
+    STARTED_COMPLETION_THREAD.call_once(|| {
+        thread::spawn(move || {
+            let mut cq = QUEUES.1.lock();
+            while let Ok(cqe) = cq.wait_for_cqe() {
+                let mut ready = cq.ready() as usize + 1;
+                QUEUES.3.notify_additional(ready);
 
                 super::complete(cqe);
                 ready -= 1;
-            }
 
-            debug_assert!(ready == 0);
-        }
-    }); });
+                while let Some(cqe) = cq.peek_for_cqe() {
+                    if ready == 0 {
+                        ready = cq.ready() as usize + 1;
+                        QUEUES.3.notify_additional(ready);
+                    }
+
+                    super::complete(cqe);
+                    ready -= 1;
+                }
+
+                debug_assert!(ready == 0);
+            }
+        });
+    });
 }

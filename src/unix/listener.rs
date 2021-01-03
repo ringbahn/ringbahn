@@ -1,6 +1,6 @@
-use std::io;
 use std::future::Future;
-use std::os::unix::io::{RawFd};
+use std::io;
+use std::os::unix::io::RawFd;
 use std::path::Path;
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -8,8 +8,8 @@ use std::task::{Context, Poll};
 use futures_core::{ready, Stream};
 use nix::sys::socket::{self as nix_socket, SockFlag};
 
-use crate::drive::{Drive, demo::DemoDriver};
-use crate::ring::{Ring, Cancellation};
+use crate::drive::{demo::DemoDriver, Drive};
+use crate::ring::{Cancellation, Ring};
 
 use super::UnixStream;
 
@@ -42,11 +42,15 @@ impl<D: Drive> UnixListener<D> {
         let ring = Ring::new(driver);
         Ok(UnixListener {
             active: Op::Nothing,
-            fd, ring,
+            fd,
+            ring,
         })
     }
 
-    pub fn close(&mut self) -> Close<D> where D: Unpin {
+    pub fn close(&mut self) -> Close<D>
+    where
+        D: Unpin,
+    {
         Pin::new(self).close_pinned()
     }
 
@@ -77,12 +81,17 @@ impl<D: Drive> UnixListener<D> {
     }
 
     fn confirm_close(self: Pin<&mut Self>) {
-        unsafe { Pin::get_unchecked_mut(self).active = Op::Closed; }
+        unsafe {
+            Pin::get_unchecked_mut(self).active = Op::Closed;
+        }
     }
 }
 
 impl<D: Drive + Clone> UnixListener<D> {
-    pub fn accept(&mut self) -> Accept<'_, D> where D: Unpin {
+    pub fn accept(&mut self) -> Accept<'_, D>
+    where
+        D: Unpin,
+    {
         Pin::new(self).accept_pinned()
     }
 
@@ -90,17 +99,23 @@ impl<D: Drive + Clone> UnixListener<D> {
         Accept { socket: self }
     }
 
-    pub fn incoming(&mut self) -> Incoming<'_, D> where D: Unpin {
+    pub fn incoming(&mut self) -> Incoming<'_, D>
+    where
+        D: Unpin,
+    {
         Pin::new(self).incoming_pinned()
     }
 
     pub fn incoming_pinned(self: Pin<&mut Self>) -> Incoming<'_, D> {
-        Incoming { accept: self.accept_pinned() }
+        Incoming {
+            accept: self.accept_pinned(),
+        }
     }
 
-    pub fn poll_accept(mut self: Pin<&mut Self>, ctx: &mut Context<'_>)
-        -> Poll<io::Result<UnixStream<D>>>
-    {
+    pub fn poll_accept(
+        mut self: Pin<&mut Self>,
+        ctx: &mut Context<'_>,
+    ) -> Poll<io::Result<UnixStream<D>>> {
         self.as_mut().guard_op(Op::Accept);
         let fd = self.fd;
         let fd = ready!(self.as_mut().ring().poll(ctx, 1, |sqs| unsafe {
@@ -110,15 +125,16 @@ impl<D: Drive + Clone> UnixListener<D> {
         }))? as RawFd;
         Poll::Ready(Ok(UnixStream::from_fd(fd, self.ring().clone())))
     }
-
 }
 
 impl<D: Drive> Drop for UnixListener<D> {
     fn drop(&mut self) {
         match self.active {
-            Op::Closed  => { }
-            Op::Nothing => unsafe { libc::close(self.fd); }
-            _           => self.cancel(),
+            Op::Closed => {}
+            Op::Nothing => unsafe {
+                libc::close(self.fd);
+            },
+            _ => self.cancel(),
         }
     }
 }
@@ -153,7 +169,6 @@ impl<'a, D: Drive + Clone> Stream for Incoming<'a, D> {
         Poll::Ready(Some(next))
     }
 }
-
 
 pub struct Close<'a, D: Drive> {
     socket: Pin<&'a mut UnixListener<D>>,

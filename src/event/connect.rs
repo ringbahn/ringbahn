@@ -1,10 +1,10 @@
 use std::mem::ManuallyDrop;
 use std::os::unix::io::RawFd;
 
-use iou::sqe::SockAddr;
 use iou::registrar::UringFd;
+use iou::sqe::SockAddr;
 
-use super::{Event, SQE, SQEs, Cancellation};
+use super::{Cancellation, Event, SQEs, SQE};
 
 pub struct Connect<FD = RawFd> {
     pub fd: FD,
@@ -12,7 +12,9 @@ pub struct Connect<FD = RawFd> {
 }
 
 impl<FD: UringFd + Copy> Event for Connect<FD> {
-    fn sqes_needed(&self) -> u32 { 1 }
+    fn sqes_needed(&self) -> u32 {
+        1
+    }
 
     unsafe fn prepare<'sq>(&mut self, sqs: &mut SQEs<'sq>) -> SQE<'sq> {
         let mut sqe = sqs.single().unwrap();

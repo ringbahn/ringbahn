@@ -1,9 +1,9 @@
 use std::fs::File;
 use std::os::unix::io::AsRawFd;
 
-use ringbahn::Submission;
-use ringbahn::event::ReadVectored;
 use ringbahn::drive::demo;
+use ringbahn::event::ReadVectored;
+use ringbahn::Submission;
 
 const ASSERT: &[u8] = b"But this formidable power of death -";
 
@@ -20,7 +20,7 @@ fn readv_file() {
     };
     let (readv, result) = futures::executor::block_on(Submission::new(readv, demo::driver()));
     assert!(result.is_ok());
-    assert_eq!(readv.bufs[0][..], ASSERT[0..4]); 
-    assert_eq!(readv.bufs[1][..], ASSERT[4..9]); 
-    assert_eq!(readv.bufs[2][..], ASSERT[9..19]); 
+    assert_eq!(readv.bufs[0][..], ASSERT[0..4]);
+    assert_eq!(readv.bufs[1][..], ASSERT[4..9]);
+    assert_eq!(readv.bufs[2][..], ASSERT[9..19]);
 }

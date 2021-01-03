@@ -1,9 +1,9 @@
 use std::mem::ManuallyDrop;
 use std::os::unix::io::RawFd;
 
-use iou::registrar::{UringFd, RegisteredBuf};
+use iou::registrar::{RegisteredBuf, UringFd};
 
-use super::{Event, SQE, SQEs, Cancellation};
+use super::{Cancellation, Event, SQEs, SQE};
 
 /// A basic read event.
 pub struct Read<FD = RawFd> {
@@ -13,7 +13,9 @@ pub struct Read<FD = RawFd> {
 }
 
 impl<FD: UringFd + Copy> Event for Read<FD> {
-    fn sqes_needed(&self) -> u32 { 1 }
+    fn sqes_needed(&self) -> u32 {
+        1
+    }
 
     unsafe fn prepare<'sq>(&mut self, sqs: &mut SQEs<'sq>) -> SQE<'sq> {
         let mut sqe = sqs.single().unwrap();
@@ -33,7 +35,9 @@ pub struct ReadFixed<FD = RawFd> {
 }
 
 impl<FD: UringFd + Copy> Event for ReadFixed<FD> {
-    fn sqes_needed(&self) -> u32 { 1 }
+    fn sqes_needed(&self) -> u32 {
+        1
+    }
 
     unsafe fn prepare<'sq>(&mut self, sqs: &mut SQEs<'sq>) -> SQE<'sq> {
         let mut sqe = sqs.single().unwrap();

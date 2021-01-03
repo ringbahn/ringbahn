@@ -1,7 +1,7 @@
 use std::mem::ManuallyDrop;
 use std::os::unix::io::RawFd;
 
-use super::{Event, SQE, SQEs, Cancellation};
+use super::{Cancellation, Event, SQEs, SQE};
 
 pub struct FilesUpdate {
     pub files: Box<[RawFd]>,
@@ -9,7 +9,9 @@ pub struct FilesUpdate {
 }
 
 impl Event for FilesUpdate {
-    fn sqes_needed(&self) -> u32 { 1 }
+    fn sqes_needed(&self) -> u32 {
+        1
+    }
 
     unsafe fn prepare<'sq>(&mut self, sqs: &mut SQEs<'sq>) -> SQE<'sq> {
         let mut sqe = sqs.single().unwrap();

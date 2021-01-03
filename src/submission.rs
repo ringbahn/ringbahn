@@ -6,7 +6,7 @@ use std::task::{Context, Poll};
 
 use futures_core::ready;
 
-use crate::{Event, Drive, ring::Ring};
+use crate::{ring::Ring, Drive, Event};
 
 /// A [`Future`] representing an event submitted to io-uring
 pub struct Submission<E: Event, D: Drive> {
@@ -44,7 +44,8 @@ impl<E: Event, D: Drive> Submission<E, D> {
     }
 }
 
-impl<E, D> Future for Submission<E, D> where
+impl<E, D> Future for Submission<E, D>
+where
     E: Event,
     D: Drive,
 {
@@ -63,7 +64,6 @@ impl<E, D> Future for Submission<E, D> where
         Poll::Ready((event.take().unwrap(), result))
     }
 }
-
 
 impl<E: Event, D: Drive> Drop for Submission<E, D> {
     fn drop(&mut self) {

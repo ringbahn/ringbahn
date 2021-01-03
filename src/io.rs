@@ -3,14 +3,14 @@ use std::future::Future;
 use std::io;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::pin::Pin;
-use std::task::{Poll, Context};
+use std::task::{Context, Poll};
 
 use futures_core::ready;
 use futures_io::AsyncWrite;
 
 use crate::buf::Buffer;
-use crate::{Drive, ring::Ring};
 use crate::drive::demo::DemoDriver;
+use crate::{ring::Ring, Drive};
 
 #[macro_export]
 macro_rules! print {
@@ -55,7 +55,9 @@ pub async fn __print<D: Drive>(driver: D, bytes: impl Into<Cow<'static, [u8]>>) 
         fd: 1,
         bytes: bytes.into(),
         idx: 0,
-    }.await.expect("printing to stdout failed")
+    }
+    .await
+    .expect("printing to stdout failed")
 }
 
 #[doc(hidden)]
@@ -65,7 +67,9 @@ pub async fn __eprint<D: Drive>(driver: D, bytes: impl Into<Cow<'static, [u8]>>)
         fd: 2,
         bytes: bytes.into(),
         idx: 0,
-    }.await.expect("printing to stderr failed")
+    }
+    .await
+    .expect("printing to stderr failed")
 }
 
 struct Print<D: Drive> {
@@ -80,7 +84,12 @@ impl<D: Drive> Print<D> {
         unsafe {
             let this = Pin::get_unchecked_mut(self);
             let bytes = &this.bytes.as_ref()[this.idx..];
-            (Pin::new_unchecked(&mut this.ring), this.fd, bytes, &mut this.idx)
+            (
+                Pin::new_unchecked(&mut this.ring),
+                this.fd,
+                bytes,
+                &mut this.idx,
+            )
         }
     }
 }
@@ -151,14 +160,17 @@ impl<D: Drive> Stdout<D> {
 }
 
 impl<D: Drive> AsyncWrite for Stdout<D> {
-    fn poll_write(self: Pin<&mut Self>, ctx: &mut Context<'_>, slice: &[u8])
-        -> Poll<io::Result<usize>>
-    {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        ctx: &mut Context<'_>,
+        slice: &[u8],
+    ) -> Poll<io::Result<usize>> {
         let fd = self.as_raw_fd();
         let (ring, buf, ..) = self.split();
-        let data = ready!(buf.fill_buf(|mut buf| {
-            Poll::Ready(Ok(io::Write::write(&mut buf, slice)? as u32))
-        }))?;
+        let data =
+            ready!(buf.fill_buf(|mut buf| {
+                Poll::Ready(Ok(io::Write::write(&mut buf, slice)? as u32))
+            }))?;
         let n = ready!(ring.poll(ctx, 1, |sqs| {
             let mut sqe = sqs.single().unwrap();
             unsafe {

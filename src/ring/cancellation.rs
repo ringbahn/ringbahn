@@ -58,7 +58,10 @@ unsafe impl Cancel for Box<dyn Any + Send + Sync> {
     }
 
     unsafe fn drop_raw(data: *mut (), metadata: usize) {
-        let obj = TraitObject { data, vtable: metadata as *mut () };
+        let obj = TraitObject {
+            data,
+            vtable: metadata as *mut (),
+        };
         drop(mem::transmute::<TraitObject, Self>(obj));
     }
 }
@@ -88,13 +91,13 @@ unsafe impl Cancel for () {
         (ptr::null_mut(), 0)
     }
 
-    unsafe fn drop_raw(_: *mut (), _: usize) { }
+    unsafe fn drop_raw(_: *mut (), _: usize) {}
 }
 
-pub unsafe trait CancelNarrow: Cancel { }
+pub unsafe trait CancelNarrow: Cancel {}
 
-unsafe impl<T> CancelNarrow for Box<T> { }
-unsafe impl CancelNarrow for CString { }
+unsafe impl<T> CancelNarrow for Box<T> {}
+unsafe impl CancelNarrow for CString {}
 
 unsafe impl<T: CancelNarrow, U: CancelNarrow> Cancel for (T, U) {
     fn into_raw(self) -> (*mut (), usize) {
@@ -109,11 +112,14 @@ unsafe impl<T: CancelNarrow, U: CancelNarrow> Cancel for (T, U) {
     }
 }
 
-
 impl Cancellation {
     fn new<T: Cancel>(object: T) -> Cancellation {
         let (data, metadata) = object.into_raw();
-        Cancellation { data, metadata, drop: T::drop_raw }
+        Cancellation {
+            data,
+            metadata,
+            drop: T::drop_raw,
+        }
     }
 }
 
@@ -123,7 +129,10 @@ impl<T: Cancel> From<T> for Cancellation {
     }
 }
 
-impl<T> From<Option<T>> for Cancellation where Cancellation: From<T> {
+impl<T> From<Option<T>> for Cancellation
+where
+    Cancellation: From<T>,
+{
     fn from(object: Option<T>) -> Cancellation {
         object.map_or(Cancellation::new(()), Cancellation::from)
     }
@@ -135,19 +144,20 @@ impl From<Buffer> for Cancellation {
     }
 }
 
-impl<T, U> From<Either<T, U>> for Cancellation where Cancellation: From<T> + From<U> {
+impl<T, U> From<Either<T, U>> for Cancellation
+where
+    Cancellation: From<T> + From<U>,
+{
     fn from(object: Either<T, U>) -> Cancellation {
         object.either(Cancellation::from, Cancellation::from)
     }
 }
 
-unsafe impl Send for Cancellation { }
-unsafe impl Sync for Cancellation { }
+unsafe impl Send for Cancellation {}
+unsafe impl Sync for Cancellation {}
 
 impl Drop for Cancellation {
     fn drop(&mut self) {
-        unsafe {
-            (self.drop)(self.data, self.metadata)
-        }
+        unsafe { (self.drop)(self.data, self.metadata) }
     }
 }

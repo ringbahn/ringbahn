@@ -52,18 +52,22 @@ impl Completion {
     pub fn check(self, waker: &Waker) -> Result<io::Result<u32>, Completion> {
         let mut state = self.state.lock();
         match mem::replace(&mut *state, State::Empty) {
-            Submitted(old_waker)    => {
-                let waker = if old_waker.will_wake(waker) { old_waker } else { waker.clone() };
+            Submitted(old_waker) => {
+                let waker = if old_waker.will_wake(waker) {
+                    old_waker
+                } else {
+                    waker.clone()
+                };
                 *state = Submitted(waker);
                 drop(state);
                 Err(self)
             }
-            Completed(result)       => {
+            Completed(result) => {
                 drop(state);
                 drop(ManuallyDrop::into_inner(self.state));
                 Ok(result)
             }
-            _                       => unreachable!()
+            _ => unreachable!(),
         }
     }
 
@@ -72,23 +76,23 @@ impl Completion {
     pub fn cancel(self, callback: Cancellation) {
         let mut state = self.state.lock();
         match &*state {
-            Submitted(_)    => {
+            Submitted(_) => {
                 *state = Cancelled(callback);
                 drop(state);
             }
-            Completed(_)    => {
+            Completed(_) => {
                 drop(callback);
                 drop(state);
                 drop(ManuallyDrop::into_inner(self.state));
             }
-            _               => unreachable!()
+            _ => unreachable!(),
         }
     }
 
     fn complete(self, result: io::Result<u32>) {
         let mut state = self.state.lock();
         match mem::replace(&mut *state, State::Empty) {
-            Submitted(waker)    => {
+            Submitted(waker) => {
                 *state = Completed(result);
                 waker.wake();
             }
@@ -97,7 +101,7 @@ impl Completion {
                 drop(state);
                 drop(ManuallyDrop::into_inner(self.state));
             }
-            _                   => unreachable!()
+            _ => unreachable!(),
         }
     }
 }
@@ -112,7 +116,7 @@ pub fn complete(cqe: CQE) {
 
         if !state.is_null() {
             let completion = Completion {
-                state: ManuallyDrop::new(Box::from_raw(state))
+                state: ManuallyDrop::new(Box::from_raw(state)),
             };
             completion.complete(result);
         }

@@ -1,13 +1,13 @@
 use std::ffi::CString;
 use std::mem::{self, ManuallyDrop};
-use std::os::unix::io::RawFd;
 use std::os::unix::ffi::OsStrExt;
+use std::os::unix::io::RawFd;
 use std::path::Path;
 
-use iou::sqe::{StatxFlags, StatxMode};
 use iou::registrar::UringFd;
+use iou::sqe::{StatxFlags, StatxMode};
 
-use super::{Event, SQE, SQEs, Cancellation};
+use super::{Cancellation, Event, SQEs, SQE};
 
 pub struct Statx<FD = RawFd> {
     pub dir_fd: FD,
@@ -21,7 +21,13 @@ impl Statx {
     pub fn without_dir(path: impl AsRef<Path>, flags: StatxFlags, mask: StatxMode) -> Statx {
         let path = CString::new(path.as_ref().as_os_str().as_bytes()).unwrap();
         let statx = unsafe { Box::new(mem::zeroed()) };
-        Statx { path, dir_fd: libc::AT_FDCWD, flags, mask, statx }
+        Statx {
+            path,
+            dir_fd: libc::AT_FDCWD,
+            flags,
+            mask,
+            statx,
+        }
     }
 }
 
@@ -32,17 +38,31 @@ impl<FD: UringFd> Statx<FD> {
             let path = CString::new("").unwrap();
             let statx = Box::new(mem::zeroed());
             flags.insert(StatxFlags::AT_EMPTY_PATH);
-            Statx { dir_fd: fd, path, flags, mask, statx }
+            Statx {
+                dir_fd: fd,
+                path,
+                flags,
+                mask,
+                statx,
+            }
         }
     }
 }
 
 impl<FD: UringFd + Copy> Event for Statx<FD> {
-    fn sqes_needed(&self) -> u32 { 1 }
+    fn sqes_needed(&self) -> u32 {
+        1
+    }
 
     unsafe fn prepare<'sq>(&mut self, sqs: &mut SQEs<'sq>) -> SQE<'sq> {
         let mut sqe = sqs.single().unwrap();
-        sqe.prep_statx(self.dir_fd, self.path.as_c_str(), self.flags, self.mask, &mut *self.statx);
+        sqe.prep_statx(
+            self.dir_fd,
+            self.path.as_c_str(),
+            self.flags,
+            self.mask,
+            &mut *self.statx,
+        );
         sqe
     }
 

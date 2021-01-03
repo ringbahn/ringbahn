@@ -15,12 +15,15 @@ pub struct Buffer {
 
 impl Buffer {
     pub fn buffered_from_read(&self) -> &[u8] {
-        self.data.as_deref().map_or(&[], |data| &data[self.pos as usize..self.cap as usize])
+        self.data
+            .as_deref()
+            .map_or(&[], |data| &data[self.pos as usize..self.cap as usize])
     }
 
-    pub fn fill_buf(&mut self, fill: impl FnOnce(&mut [u8]) -> Poll<io::Result<u32>>)
-        -> Poll<io::Result<&[u8]>>
-    {
+    pub fn fill_buf(
+        &mut self,
+        fill: impl FnOnce(&mut [u8]) -> Poll<io::Result<u32>>,
+    ) -> Poll<io::Result<&[u8]>> {
         const CAPACITY: usize = 4096 * 2;
 
         if self.pos >= self.cap {

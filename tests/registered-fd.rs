@@ -1,7 +1,7 @@
 use std::os::unix::io::IntoRawFd;
 
-use ringbahn::event::*;
 use ringbahn::drive::{demo, Drive};
+use ringbahn::event::*;
 
 use iou::sqe::*;
 
@@ -9,8 +9,12 @@ use iou::sqe::*;
 fn test_registered_fd_ops() {
     // open and register file
     let file = std::fs::File::open("props.txt").unwrap();
-    let fd = demo::registrar().unwrap()
-                  .register_files(&[file.into_raw_fd()]).unwrap().next().unwrap();
+    let fd = demo::registrar()
+        .unwrap()
+        .register_files(&[file.into_raw_fd()])
+        .unwrap()
+        .next()
+        .unwrap();
 
     futures::executor::block_on(async move {
         // read file and print contents to stdout
@@ -21,11 +25,13 @@ fn test_registered_fd_ops() {
         ringbahn::println!(demo::driver(), "{}", data).await;
 
         // statx file and print statx to stdout
-        let (event, result) = demo::driver().submit(Statx::without_path(
-            fd,
-            StatxFlags::empty(),
-            StatxMode::all(),
-        )).await;
+        let (event, result) = demo::driver()
+            .submit(Statx::without_path(
+                fd,
+                StatxFlags::empty(),
+                StatxMode::all(),
+            ))
+            .await;
         result.unwrap();
         ringbahn::println!(demo::driver(), "{:?}", event.statx).await;
 

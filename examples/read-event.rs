@@ -10,7 +10,7 @@ fn main() -> io::Result<()> {
     let event = event::Read {
         fd: file.as_raw_fd(),
         buf: vec![0; meta.len() as usize].into(),
-        offset: 0
+        offset: 0,
     };
     let submission = Submission::new(event, driver.clone());
     futures::executor::block_on(async move {

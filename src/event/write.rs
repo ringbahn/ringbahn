@@ -1,9 +1,9 @@
 use std::mem::ManuallyDrop;
 use std::os::unix::io::RawFd;
 
-use iou::registrar::{UringFd, RegisteredBuf};
+use iou::registrar::{RegisteredBuf, UringFd};
 
-use super::{Event, SQE, SQEs, Cancellation};
+use super::{Cancellation, Event, SQEs, SQE};
 
 /// A basic write event.
 pub struct Write<FD = RawFd> {
@@ -13,7 +13,9 @@ pub struct Write<FD = RawFd> {
 }
 
 impl<FD: UringFd + Copy> Event for Write<FD> {
-    fn sqes_needed(&self) -> u32 { 1 }
+    fn sqes_needed(&self) -> u32 {
+        1
+    }
 
     unsafe fn prepare<'sq>(&mut self, sqs: &mut SQEs<'sq>) -> SQE<'sq> {
         let mut sqe = sqs.single().unwrap();
@@ -33,7 +35,9 @@ pub struct WriteFixed<FD = RawFd> {
 }
 
 impl<FD: UringFd + Copy> Event for WriteFixed<FD> {
-    fn sqes_needed(&self) -> u32 { 1 }
+    fn sqes_needed(&self) -> u32 {
+        1
+    }
 
     unsafe fn prepare<'sq>(&mut self, sqs: &mut SQEs<'sq>) -> SQE<'sq> {
         let mut sqe = sqs.single().unwrap();

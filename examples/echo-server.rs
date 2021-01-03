@@ -1,8 +1,8 @@
 use ringbahn::net::TcpListener;
 
-use futures::StreamExt;
+use futures::executor::{block_on, ThreadPool};
 use futures::io::{AsyncReadExt, AsyncWriteExt};
-use futures::executor::{ThreadPool, block_on};
+use futures::StreamExt;
 
 fn main() {
     let mut listener = TcpListener::bind(("127.0.0.1", 7878)).unwrap();

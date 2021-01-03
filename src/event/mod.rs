@@ -22,7 +22,7 @@ mod writev;
 
 use std::mem::ManuallyDrop;
 
-use iou::{SQE, SQEs};
+use iou::{SQEs, SQE};
 
 use crate::ring::Cancellation;
 
@@ -42,7 +42,7 @@ pub use recv::Recv;
 pub use send::Send;
 pub use splice::Splice;
 pub use statx::Statx;
-pub use timeout::{Timeout, StaticTimeout};
+pub use timeout::{StaticTimeout, Timeout};
 pub use write::{Write, WriteFixed};
 pub use writev::WriteVectored;
 
@@ -83,7 +83,10 @@ pub trait Event {
     /// If this event is cancelled, this callback will be stored with the completion to be dropped
     /// when the IO event completes. This way, any managed resources passed to the kernel (like
     /// buffers) can be cleaned up once the kernel no longer needs them.
-    fn cancel(_: ManuallyDrop<Self>) -> Cancellation where Self: Sized {
+    fn cancel(_: ManuallyDrop<Self>) -> Cancellation
+    where
+        Self: Sized,
+    {
         Cancellation::from(())
     }
 }

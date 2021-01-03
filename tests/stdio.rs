@@ -1,6 +1,6 @@
 use futures::AsyncWriteExt;
 
-use ringbahn::{drive::demo};
+use ringbahn::drive::demo;
 
 const ASSERT: &[u8] = b"Hello, world!\n";
 

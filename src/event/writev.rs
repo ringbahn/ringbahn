@@ -1,10 +1,10 @@
-use std::io::IoSlice; 
+use std::io::IoSlice;
 use std::mem::ManuallyDrop;
 use std::os::unix::io::RawFd;
 
 use iou::registrar::UringFd;
 
-use super::{Event, SQE, SQEs, Cancellation};
+use super::{Cancellation, Event, SQEs, SQE};
 
 /// A `writev` event.
 pub struct WriteVectored<FD = RawFd> {
@@ -15,12 +15,14 @@ pub struct WriteVectored<FD = RawFd> {
 
 impl<FD> WriteVectored<FD> {
     fn iovecs(&self) -> &[IoSlice] {
-        unsafe { & *(&self.bufs[..] as *const [Box<[u8]>] as *const [IoSlice]) }
+        unsafe { &*(&self.bufs[..] as *const [Box<[u8]>] as *const [IoSlice]) }
     }
 }
 
 impl<FD: UringFd + Copy> Event for WriteVectored<FD> {
-    fn sqes_needed(&self) -> u32 { 1 }
+    fn sqes_needed(&self) -> u32 {
+        1
+    }
 
     unsafe fn prepare<'sq>(&mut self, sqs: &mut SQEs<'sq>) -> SQE<'sq> {
         let mut sqe = sqs.single().unwrap();

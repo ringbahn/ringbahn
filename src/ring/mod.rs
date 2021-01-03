@@ -7,17 +7,17 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use futures_core::ready;
-use iou::{SQE, SQEs};
+use iou::{SQEs, SQE};
 
 use crate::drive::{self, Drive};
 
-pub use cancellation::{Cancellation, Cancel, CancelNarrow};
+pub use cancellation::{Cancel, CancelNarrow, Cancellation};
 pub(crate) use completion::Completion;
 
 use State::*;
 
 /// A low-level primitive for building an IO object on io-uring
-/// 
+///
 /// Ring is a state machine similar to `Submission`, but it is designed to cycle through multiple
 /// IO events submitted to io-uring, rather than representing a single submission. Because of this,
 /// it is more low level, but it is suitable for building an IO object like a `File` on top of
@@ -41,7 +41,6 @@ enum State {
     Lost,
 }
 
-
 impl<D: Default + Drive> Default for Ring<D> {
     fn default() -> Ring<D> {
         Ring::new(D::default())
@@ -60,7 +59,7 @@ impl<D: Drive> Ring<D> {
     pub fn new(driver: D) -> Ring<D> {
         Ring {
             state: Inert,
-            driver
+            driver,
         }
     }
 
@@ -87,17 +86,15 @@ impl<D: Drive> Ring<D> {
                 ready!(self.as_mut().poll_submit(ctx));
                 Poll::Pending
             }
-            Prepared(_)             => {
-                match self.as_mut().poll_complete(ctx) {
-                    ready @ Poll::Ready(..) => ready,
-                    Poll::Pending           => {
-                        ready!(self.poll_submit(ctx));
-                        Poll::Pending
-                    }
+            Prepared(_) => match self.as_mut().poll_complete(ctx) {
+                ready @ Poll::Ready(..) => ready,
+                Poll::Pending => {
+                    ready!(self.poll_submit(ctx));
+                    Poll::Pending
                 }
-            }
-            Submitted(_)            => self.poll_complete(ctx),
-            Lost                    => panic!("Ring in a bad state; driver is faulty"),
+            },
+            Submitted(_) => self.poll_complete(ctx),
+            Lost => panic!("Ring in a bad state; driver is faulty"),
         }
     }
 
@@ -110,22 +107,20 @@ impl<D: Drive> Ring<D> {
     ) -> Poll<()> {
         let (driver, state) = self.split();
         let completion = match *state {
-            Cancelled(prev) => {
-                ready!(driver.poll_prepare(ctx, count + 1, |mut sqs, ctx| {
-                    *state = Lost;
-                    unsafe { sqs.hard_linked().next().unwrap().prep_cancel(prev, 0); }
-                    let sqe = prepare(&mut sqs);
-                    drive::Completion::new(sqe, sqs, ctx)
-                }))
-            }
-            Inert           => {
-                ready!(driver.poll_prepare(ctx, count, |mut sqs, ctx| {
-                    *state = Lost;
-                    let sqe = prepare(&mut sqs);
-                    drive::Completion::new(sqe, sqs, ctx)
-                }))
-            }
-            _               => unreachable!(),
+            Cancelled(prev) => ready!(driver.poll_prepare(ctx, count + 1, |mut sqs, ctx| {
+                *state = Lost;
+                unsafe {
+                    sqs.hard_linked().next().unwrap().prep_cancel(prev, 0);
+                }
+                let sqe = prepare(&mut sqs);
+                drive::Completion::new(sqe, sqs, ctx)
+            })),
+            Inert => ready!(driver.poll_prepare(ctx, count, |mut sqs, ctx| {
+                *state = Lost;
+                let sqe = prepare(&mut sqs);
+                drive::Completion::new(sqe, sqs, ctx)
+            })),
+            _ => unreachable!(),
         };
         *state = Prepared(completion.real);
         Poll::Ready(())
@@ -148,31 +143,27 @@ impl<D: Drive> Ring<D> {
     fn poll_complete(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<io::Result<u32>> {
         let (_, state) = self.split();
         match mem::replace(state, Lost) {
-            Prepared(completion)    => {
-                match completion.check(ctx.waker()) {
-                    Ok(result)      => {
-                        *state = Inert;
-                        Poll::Ready(result)
-                    }
-                    Err(completion) => {
-                        *state = Prepared(completion);
-                        Poll::Pending
-                    }
+            Prepared(completion) => match completion.check(ctx.waker()) {
+                Ok(result) => {
+                    *state = Inert;
+                    Poll::Ready(result)
                 }
-            }
-            Submitted(completion)   => {
-                match completion.check(ctx.waker()) {
-                    Ok(result)      => {
-                        *state = Inert;
-                        Poll::Ready(result)
-                    }
-                    Err(completion) => {
-                        *state = Submitted(completion);
-                        Poll::Pending
-                    }
+                Err(completion) => {
+                    *state = Prepared(completion);
+                    Poll::Pending
                 }
-            }
-            _                       => unreachable!(),
+            },
+            Submitted(completion) => match completion.check(ctx.waker()) {
+                Ok(result) => {
+                    *state = Inert;
+                    Poll::Ready(result)
+                }
+                Err(completion) => {
+                    *state = Submitted(completion);
+                    Poll::Pending
+                }
+            },
+            _ => unreachable!(),
         }
     }
 
@@ -207,7 +198,7 @@ impl State {
                 *self = Cancelled(completion.addr());
                 completion.cancel(cancellation);
             }
-            state                                       => {
+            state => {
                 *self = state;
             }
         }

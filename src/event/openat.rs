@@ -1,12 +1,12 @@
 use std::ffi::CString;
 use std::mem::ManuallyDrop;
-use std::os::unix::io::RawFd;
 use std::os::unix::ffi::OsStrExt;
+use std::os::unix::io::RawFd;
 use std::path::Path;
 
 use iou::sqe::{Mode, OFlag};
 
-use super::{Event, SQE, SQEs, Cancellation};
+use super::{Cancellation, Event, SQEs, SQE};
 
 pub struct OpenAt {
     pub path: CString,
@@ -18,12 +18,19 @@ pub struct OpenAt {
 impl OpenAt {
     pub fn without_dir(path: impl AsRef<Path>, flags: OFlag, mode: Mode) -> OpenAt {
         let path = CString::new(path.as_ref().as_os_str().as_bytes()).unwrap();
-        OpenAt { path, dir_fd: libc::AT_FDCWD, flags, mode }
+        OpenAt {
+            path,
+            dir_fd: libc::AT_FDCWD,
+            flags,
+            mode,
+        }
     }
 }
 
 impl Event for OpenAt {
-    fn sqes_needed(&self) -> u32 { 1 }
+    fn sqes_needed(&self) -> u32 {
+        1
+    }
 
     unsafe fn prepare<'sq>(&mut self, sqs: &mut SQEs<'sq>) -> SQE<'sq> {
         let mut sqe = sqs.single().unwrap();

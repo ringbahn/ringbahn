@@ -1,9 +1,9 @@
 use std::fs::File;
 use std::os::unix::io::AsRawFd;
 
-use ringbahn::Submission;
-use ringbahn::event::Read;
 use ringbahn::drive::demo;
+use ringbahn::event::Read;
+use ringbahn::Submission;
 
 const ASSERT: &[u8] = b"But this formidable power of death -";
 

@@ -8,8 +8,8 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use crate::ring;
-use crate::{Submission, Event};
-use iou::{SQE, SQEs};
+use crate::{Event, Submission};
+use iou::{SQEs, SQE};
 
 pub use crate::ring::completion::complete;
 
@@ -29,7 +29,10 @@ impl<'cx> Completion<'cx> {
             sqe.set_user_data(real.addr());
         }
 
-        Completion { real, marker: PhantomData }
+        Completion {
+            real,
+            marker: PhantomData,
+        }
     }
 }
 
@@ -73,12 +76,12 @@ pub trait Drive {
     /// It is also valid not to submit an event but not to register a waker to try again, in which
     /// case the appropriate response would be to return `Ok(0)`. This indicates to the caller that
     /// the submission step is complete, whether or not actual IO was performed by the driver.
-    fn poll_submit(
-        self: Pin<&mut Self>,
-        ctx: &mut Context<'_>,
-    ) -> Poll<io::Result<u32>>;
+    fn poll_submit(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<io::Result<u32>>;
 
-    fn submit<E: Event>(self, event: E) -> Submission<E, Self> where Self: Sized {
+    fn submit<E: Event>(self, event: E) -> Submission<E, Self>
+    where
+        Self: Sized,
+    {
         Submission::new(event, self)
     }
 }
