@@ -101,11 +101,10 @@ impl<D: Drive> Future for Print<D> {
         let (mut ring, fd, mut bytes, idx) = self.split();
         if !bytes.is_empty() {
             loop {
-                let written = ready!(ring.as_mut().poll(ctx, 1, |sqs| unsafe {
-                    let mut sqe = sqs.single().unwrap();
-                    sqe.prep_write(fd, bytes, 0);
-                    sqe
-                }))? as usize;
+                let written = ready!(ring
+                    .as_mut()
+                    .poll(ctx, |sqe| unsafe { sqe.prep_write(fd, bytes, 0) }))?
+                    as usize;
                 *idx += written;
                 if written == bytes.len() {
                     return Poll::Ready(Ok(()));
@@ -171,13 +170,7 @@ impl<D: Drive> AsyncWrite for Stdout<D> {
             ready!(buf.fill_buf(|mut buf| {
                 Poll::Ready(Ok(io::Write::write(&mut buf, slice)? as u32))
             }))?;
-        let n = ready!(ring.poll(ctx, 1, |sqs| {
-            let mut sqe = sqs.single().unwrap();
-            unsafe {
-                sqe.prep_write(fd, data, 0);
-            }
-            sqe
-        }))?;
+        let n = ready!(ring.poll(ctx, |sqe| unsafe { sqe.prep_write(fd, data, 0) }))?;
         buf.clear();
         Poll::Ready(Ok(n as usize))
     }

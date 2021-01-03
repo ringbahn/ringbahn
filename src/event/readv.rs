@@ -4,7 +4,7 @@ use std::os::unix::io::RawFd;
 
 use iou::registrar::UringFd;
 
-use super::{Cancellation, Event, SQEs, SQE};
+use super::{Cancellation, Event, SQE};
 
 /// A `readv` event.
 pub struct ReadVectored<FD = RawFd> {
@@ -33,14 +33,8 @@ impl<FD> ReadVectored<FD> {
 }
 
 impl<FD: UringFd + Copy> Event for ReadVectored<FD> {
-    fn sqes_needed(&self) -> u32 {
-        1
-    }
-
-    unsafe fn prepare<'sq>(&mut self, sqs: &mut SQEs<'sq>) -> SQE<'sq> {
-        let mut sqe = sqs.single().unwrap();
+    unsafe fn prepare(&mut self, sqe: &mut SQE) {
         sqe.prep_read_vectored(self.fd, Self::as_iovecs(&mut self.bufs[..]), self.offset);
-        sqe
     }
 
     fn cancel(this: ManuallyDrop<Self>) -> Cancellation {

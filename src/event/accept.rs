@@ -4,7 +4,7 @@ use std::os::unix::io::RawFd;
 use iou::registrar::UringFd;
 use iou::sqe::{SockAddrStorage, SockFlag};
 
-use super::{Cancellation, Event, SQEs, SQE};
+use super::{Cancellation, Event, SQE};
 
 pub struct Accept<FD = RawFd> {
     pub addr: Option<Box<SockAddrStorage>>,
@@ -13,14 +13,8 @@ pub struct Accept<FD = RawFd> {
 }
 
 impl<FD: UringFd + Copy> Event for Accept<FD> {
-    fn sqes_needed(&self) -> u32 {
-        1
-    }
-
-    unsafe fn prepare<'sq>(&mut self, sqs: &mut SQEs<'sq>) -> SQE<'sq> {
-        let mut sqe = sqs.single().unwrap();
+    unsafe fn prepare(&mut self, sqe: &mut SQE) {
         sqe.prep_accept(self.fd, self.addr.as_deref_mut(), self.flags);
-        sqe
     }
 
     fn cancel(this: ManuallyDrop<Self>) -> Cancellation {

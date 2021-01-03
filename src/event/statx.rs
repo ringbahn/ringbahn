@@ -7,7 +7,7 @@ use std::path::Path;
 use iou::registrar::UringFd;
 use iou::sqe::{StatxFlags, StatxMode};
 
-use super::{Cancellation, Event, SQEs, SQE};
+use super::{Cancellation, Event, SQE};
 
 pub struct Statx<FD = RawFd> {
     pub dir_fd: FD,
@@ -50,12 +50,7 @@ impl<FD: UringFd> Statx<FD> {
 }
 
 impl<FD: UringFd + Copy> Event for Statx<FD> {
-    fn sqes_needed(&self) -> u32 {
-        1
-    }
-
-    unsafe fn prepare<'sq>(&mut self, sqs: &mut SQEs<'sq>) -> SQE<'sq> {
-        let mut sqe = sqs.single().unwrap();
+    unsafe fn prepare(&mut self, sqe: &mut SQE) {
         sqe.prep_statx(
             self.dir_fd,
             self.path.as_c_str(),
@@ -63,7 +58,6 @@ impl<FD: UringFd + Copy> Event for Statx<FD> {
             self.mask,
             &mut *self.statx,
         );
-        sqe
     }
 
     fn cancel(this: ManuallyDrop<Self>) -> Cancellation {

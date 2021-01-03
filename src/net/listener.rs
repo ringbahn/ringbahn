@@ -178,12 +178,8 @@ impl<D: Drive + Clone> TcpListener<D> {
         self.as_mut().guard_op(Op::Accept);
         let fd = self.fd;
         let (ring, addr, ..) = self.as_mut().split_with_addr();
-        let fd = ready!(ring.poll(ctx, 1, |sqs| {
-            let mut sqe = sqs.single().unwrap();
-            unsafe {
-                sqe.prep_accept(fd, Some(addr), SockFlag::empty());
-            }
-            sqe
+        let fd = ready!(ring.poll(ctx, |sqe| unsafe {
+            sqe.prep_accept(fd, Some(addr), SockFlag::empty())
         }))? as RawFd;
         let addr = {
             let result = unsafe { addr.as_socket_addr() };
@@ -203,12 +199,8 @@ impl<D: Drive + Clone> TcpListener<D> {
     ) -> Poll<io::Result<TcpStream<D>>> {
         self.as_mut().guard_op(Op::Accept);
         let fd = self.fd;
-        let fd = ready!(self.as_mut().ring().poll(ctx, 1, |sqs| {
-            let mut sqe = sqs.single().unwrap();
-            unsafe {
-                sqe.prep_accept(fd, None, SockFlag::empty());
-            }
-            sqe
+        let fd = ready!(self.as_mut().ring().poll(ctx, |sqe| unsafe {
+            sqe.prep_accept(fd, None, SockFlag::empty())
         }))? as RawFd;
         Poll::Ready(Ok(TcpStream::from_fd(fd, self.ring().clone())))
     }
@@ -298,13 +290,11 @@ impl<'a, D: Drive> Future for Close<'a, D> {
     fn poll(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<io::Result<()>> {
         self.socket.as_mut().guard_op(Op::Close);
         let fd = self.socket.fd;
-        ready!(self.socket.as_mut().ring().poll(ctx, 1, |sqs| {
-            let mut sqe = sqs.single().unwrap();
-            unsafe {
-                sqe.prep_close(fd);
-            }
-            sqe
-        }))?;
+        ready!(self
+            .socket
+            .as_mut()
+            .ring()
+            .poll(ctx, |sqe| unsafe { sqe.prep_close(fd) }))?;
         self.socket.as_mut().confirm_close();
         Poll::Ready(Ok(()))
     }

@@ -22,7 +22,7 @@ mod writev;
 
 use std::mem::ManuallyDrop;
 
-use iou::{SQEs, SQE};
+use iou::SQE;
 
 use crate::ring::Cancellation;
 
@@ -58,8 +58,6 @@ pub use writev::WriteVectored;
 /// implementer has upheld. The implementer is not allowed to add any additional invariants that
 /// the caller must uphold that are not required by the trait.
 pub trait Event {
-    fn sqes_needed(&self) -> u32;
-
     /// Prepare an event to be submitted using the SQE argument.
     ///
     /// ## Safety
@@ -76,7 +74,7 @@ pub trait Event {
     /// In essence implementing prepare, users can write code ass if any heap addresses passed to
     /// the  kernel have passed ownership of that data to the kernel for the time that the event is
     /// completed.
-    unsafe fn prepare<'a>(&mut self, sqs: &mut SQEs<'a>) -> SQE<'a>;
+    unsafe fn prepare(&mut self, sqe: &mut SQE);
 
     /// Return the cancellation callback for this event.
     ///

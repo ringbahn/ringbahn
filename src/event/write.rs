@@ -3,7 +3,7 @@ use std::os::unix::io::RawFd;
 
 use iou::registrar::{RegisteredBuf, UringFd};
 
-use super::{Cancellation, Event, SQEs, SQE};
+use super::{Cancellation, Event, SQE};
 
 /// A basic write event.
 pub struct Write<FD = RawFd> {
@@ -13,14 +13,8 @@ pub struct Write<FD = RawFd> {
 }
 
 impl<FD: UringFd + Copy> Event for Write<FD> {
-    fn sqes_needed(&self) -> u32 {
-        1
-    }
-
-    unsafe fn prepare<'sq>(&mut self, sqs: &mut SQEs<'sq>) -> SQE<'sq> {
-        let mut sqe = sqs.single().unwrap();
+    unsafe fn prepare(&mut self, sqe: &mut SQE) {
         sqe.prep_write(self.fd, &self.buf[..], self.offset);
-        sqe
     }
 
     fn cancel(this: ManuallyDrop<Self>) -> Cancellation {
@@ -35,14 +29,8 @@ pub struct WriteFixed<FD = RawFd> {
 }
 
 impl<FD: UringFd + Copy> Event for WriteFixed<FD> {
-    fn sqes_needed(&self) -> u32 {
-        1
-    }
-
-    unsafe fn prepare<'sq>(&mut self, sqs: &mut SQEs<'sq>) -> SQE<'sq> {
-        let mut sqe = sqs.single().unwrap();
+    unsafe fn prepare(&mut self, sqe: &mut SQE) {
         sqe.prep_write(self.fd, self.buf.as_ref(), self.offset);
-        sqe
     }
 
     fn cancel(this: ManuallyDrop<Self>) -> Cancellation {

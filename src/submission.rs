@@ -55,8 +55,7 @@ where
         let (ring, event) = self.split();
 
         let result = if let Some(event) = event {
-            let count = event.sqes_needed();
-            ready!(ring.poll(ctx, count, |sqs| unsafe { event.prepare(sqs) }))
+            ready!(ring.poll(ctx, |sqe| unsafe { event.prepare(sqe) }))
         } else {
             panic!("polled Submission after completion")
         };

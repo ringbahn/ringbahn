@@ -1,7 +1,7 @@
 use iou::sqe::BufferGroupId;
 use std::mem::ManuallyDrop;
 
-use super::{Cancellation, Event, SQEs, SQE};
+use super::{Cancellation, Event, SQE};
 
 pub struct ProvideBuffers {
     pub bufs: Box<[u8]>,
@@ -11,14 +11,8 @@ pub struct ProvideBuffers {
 }
 
 impl Event for ProvideBuffers {
-    fn sqes_needed(&self) -> u32 {
-        1
-    }
-
-    unsafe fn prepare<'sq>(&mut self, sqs: &mut SQEs<'sq>) -> SQE<'sq> {
-        let mut sqe = sqs.single().unwrap();
+    unsafe fn prepare(&mut self, sqe: &mut SQE) {
         sqe.prep_provide_buffers(&mut self.bufs[..], self.count, self.group, self.index);
-        sqe
     }
 
     fn cancel(this: ManuallyDrop<Self>) -> Cancellation {
@@ -32,13 +26,7 @@ pub struct RemoveBuffers {
 }
 
 impl Event for RemoveBuffers {
-    fn sqes_needed(&self) -> u32 {
-        1
-    }
-
-    unsafe fn prepare<'sq>(&mut self, sqs: &mut SQEs<'sq>) -> SQE<'sq> {
-        let mut sqe = sqs.single().unwrap();
+    unsafe fn prepare(&mut self, sqe: &mut SQE) {
         sqe.prep_remove_buffers(self.count, self.group);
-        sqe
     }
 }

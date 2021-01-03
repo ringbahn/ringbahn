@@ -7,7 +7,7 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use futures_core::ready;
-use iou::{SQEs, SQE};
+use iou::SQE;
 
 use crate::drive::{self, Drive};
 
@@ -77,12 +77,11 @@ impl<D: Drive> Ring<D> {
     pub fn poll(
         mut self: Pin<&mut Self>,
         ctx: &mut Context<'_>,
-        count: u32,
-        prepare: impl for<'sq> FnOnce(&mut SQEs<'sq>) -> SQE<'sq>,
+        prepare: impl FnOnce(&mut SQE),
     ) -> Poll<io::Result<u32>> {
         match self.state {
             Inert | Cancelled(_) => {
-                ready!(self.as_mut().poll_prepare(ctx, count, prepare));
+                ready!(self.as_mut().poll_prepare(ctx, prepare));
                 ready!(self.as_mut().poll_submit(ctx));
                 Poll::Pending
             }
@@ -102,22 +101,23 @@ impl<D: Drive> Ring<D> {
     fn poll_prepare(
         self: Pin<&mut Self>,
         ctx: &mut Context<'_>,
-        count: u32,
-        prepare: impl for<'sq> FnOnce(&mut SQEs<'sq>) -> SQE<'sq>,
+        prepare: impl FnOnce(&mut SQE),
     ) -> Poll<()> {
         let (driver, state) = self.split();
         let completion = match *state {
-            Cancelled(prev) => ready!(driver.poll_prepare(ctx, count + 1, |mut sqs, ctx| {
+            Cancelled(prev) => ready!(driver.poll_prepare(ctx, 2, |mut sqs, ctx| {
                 *state = Lost;
                 unsafe {
                     sqs.hard_linked().next().unwrap().prep_cancel(prev, 0);
                 }
-                let sqe = prepare(&mut sqs);
+                let mut sqe = sqs.single().unwrap();
+                prepare(&mut sqe);
                 drive::Completion::new(sqe, sqs, ctx)
             })),
-            Inert => ready!(driver.poll_prepare(ctx, count, |mut sqs, ctx| {
+            Inert => ready!(driver.poll_prepare(ctx, 1, |mut sqs, ctx| {
                 *state = Lost;
-                let sqe = prepare(&mut sqs);
+                let mut sqe = sqs.single().unwrap();
+                prepare(&mut sqe);
                 drive::Completion::new(sqe, sqs, ctx)
             })),
             _ => unreachable!(),

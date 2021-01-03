@@ -3,7 +3,7 @@ use std::os::unix::io::RawFd;
 use iou::registrar::UringFd;
 use iou::sqe::PosixFadviseAdvice;
 
-use super::{Event, SQEs, SQE};
+use super::{Event, SQE};
 
 pub struct Fadvise<FD = RawFd> {
     pub fd: FD,
@@ -13,13 +13,7 @@ pub struct Fadvise<FD = RawFd> {
 }
 
 impl<FD: UringFd + Copy> Event for Fadvise<FD> {
-    fn sqes_needed(&self) -> u32 {
-        1
-    }
-
-    unsafe fn prepare<'sq>(&mut self, sqs: &mut SQEs<'sq>) -> SQE<'sq> {
-        let mut sqe = sqs.single().unwrap();
+    unsafe fn prepare(&mut self, sqe: &mut SQE) {
         sqe.prep_fadvise(self.fd, self.offset, self.size, self.flags);
-        sqe
     }
 }

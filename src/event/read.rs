@@ -3,7 +3,7 @@ use std::os::unix::io::RawFd;
 
 use iou::registrar::{RegisteredBuf, UringFd};
 
-use super::{Cancellation, Event, SQEs, SQE};
+use super::{Cancellation, Event, SQE};
 
 /// A basic read event.
 pub struct Read<FD = RawFd> {
@@ -13,14 +13,8 @@ pub struct Read<FD = RawFd> {
 }
 
 impl<FD: UringFd + Copy> Event for Read<FD> {
-    fn sqes_needed(&self) -> u32 {
-        1
-    }
-
-    unsafe fn prepare<'sq>(&mut self, sqs: &mut SQEs<'sq>) -> SQE<'sq> {
-        let mut sqe = sqs.single().unwrap();
+    unsafe fn prepare(&mut self, sqe: &mut SQE) {
         sqe.prep_read(self.fd, &mut self.buf[..], self.offset);
-        sqe
     }
 
     fn cancel(this: ManuallyDrop<Self>) -> Cancellation {
@@ -35,14 +29,8 @@ pub struct ReadFixed<FD = RawFd> {
 }
 
 impl<FD: UringFd + Copy> Event for ReadFixed<FD> {
-    fn sqes_needed(&self) -> u32 {
-        1
-    }
-
-    unsafe fn prepare<'sq>(&mut self, sqs: &mut SQEs<'sq>) -> SQE<'sq> {
-        let mut sqe = sqs.single().unwrap();
+    unsafe fn prepare(&mut self, sqe: &mut SQE) {
         sqe.prep_read(self.fd, self.buf.as_mut(), self.offset);
-        sqe
     }
 
     fn cancel(this: ManuallyDrop<Self>) -> Cancellation {

@@ -4,7 +4,7 @@ use std::os::unix::io::RawFd;
 
 use iou::registrar::UringFd;
 
-use super::{Cancellation, Event, SQEs, SQE};
+use super::{Cancellation, Event, SQE};
 
 /// A `writev` event.
 pub struct WriteVectored<FD = RawFd> {
@@ -20,14 +20,8 @@ impl<FD> WriteVectored<FD> {
 }
 
 impl<FD: UringFd + Copy> Event for WriteVectored<FD> {
-    fn sqes_needed(&self) -> u32 {
-        1
-    }
-
-    unsafe fn prepare<'sq>(&mut self, sqs: &mut SQEs<'sq>) -> SQE<'sq> {
-        let mut sqe = sqs.single().unwrap();
+    unsafe fn prepare(&mut self, sqe: &mut SQE) {
         sqe.prep_write_vectored(self.fd, self.iovecs(), self.offset);
-        sqe
     }
 
     fn cancel(this: ManuallyDrop<Self>) -> Cancellation {

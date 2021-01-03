@@ -1,7 +1,7 @@
 use std::mem::ManuallyDrop;
 use std::time::Duration;
 
-use super::{Cancellation, Event, SQEs, SQE};
+use super::{Cancellation, Event, SQE};
 
 use iou::sqe::TimeoutFlags;
 
@@ -22,14 +22,8 @@ impl StaticTimeout {
 }
 
 impl Event for &'static StaticTimeout {
-    fn sqes_needed(&self) -> u32 {
-        1
-    }
-
-    unsafe fn prepare<'sq>(&mut self, sqs: &mut SQEs<'sq>) -> SQE<'sq> {
-        let mut sqe = sqs.single().unwrap();
+    unsafe fn prepare(&mut self, sqe: &mut SQE) {
         sqe.prep_timeout(&self.ts, self.events, self.flags);
-        sqe
     }
 }
 
@@ -50,14 +44,8 @@ impl Timeout {
 }
 
 impl Event for Timeout {
-    fn sqes_needed(&self) -> u32 {
-        1
-    }
-
-    unsafe fn prepare<'sq>(&mut self, sqs: &mut SQEs<'sq>) -> SQE<'sq> {
-        let mut sqe = sqs.single().unwrap();
+    unsafe fn prepare(&mut self, sqe: &mut SQE) {
         sqe.prep_timeout(&*self.ts, self.events, self.flags);
-        sqe
     }
 
     fn cancel(this: ManuallyDrop<Self>) -> Cancellation {

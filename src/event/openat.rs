@@ -6,7 +6,7 @@ use std::path::Path;
 
 use iou::sqe::{Mode, OFlag};
 
-use super::{Cancellation, Event, SQEs, SQE};
+use super::{Cancellation, Event, SQE};
 
 pub struct OpenAt {
     pub path: CString,
@@ -28,14 +28,8 @@ impl OpenAt {
 }
 
 impl Event for OpenAt {
-    fn sqes_needed(&self) -> u32 {
-        1
-    }
-
-    unsafe fn prepare<'sq>(&mut self, sqs: &mut SQEs<'sq>) -> SQE<'sq> {
-        let mut sqe = sqs.single().unwrap();
+    unsafe fn prepare(&mut self, sqe: &mut SQE) {
         sqe.prep_openat(self.dir_fd, &*self.path, self.flags, self.mode);
-        sqe
     }
 
     fn cancel(this: ManuallyDrop<Self>) -> Cancellation {

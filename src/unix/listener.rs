@@ -118,10 +118,8 @@ impl<D: Drive + Clone> UnixListener<D> {
     ) -> Poll<io::Result<UnixStream<D>>> {
         self.as_mut().guard_op(Op::Accept);
         let fd = self.fd;
-        let fd = ready!(self.as_mut().ring().poll(ctx, 1, |sqs| unsafe {
-            let mut sqe = sqs.single().unwrap();
-            sqe.prep_accept(fd, None, SockFlag::empty());
-            sqe
+        let fd = ready!(self.as_mut().ring().poll(ctx, |sqe| unsafe {
+            sqe.prep_accept(fd, None, SockFlag::empty())
         }))? as RawFd;
         Poll::Ready(Ok(UnixStream::from_fd(fd, self.ring().clone())))
     }
@@ -180,11 +178,11 @@ impl<'a, D: Drive> Future for Close<'a, D> {
     fn poll(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<io::Result<()>> {
         self.socket.as_mut().guard_op(Op::Close);
         let fd = self.socket.fd;
-        ready!(self.socket.as_mut().ring().poll(ctx, 1, |sqs| unsafe {
-            let mut sqe = sqs.single().unwrap();
-            sqe.prep_close(fd);
-            sqe
-        }))?;
+        ready!(self
+            .socket
+            .as_mut()
+            .ring()
+            .poll(ctx, |sqe| unsafe { sqe.prep_close(fd) }))?;
         self.socket.as_mut().confirm_close();
         Poll::Ready(Ok(()))
     }

@@ -145,12 +145,8 @@ impl<D: Drive> File<D> {
         let (ring, statx, _pos, pending) = self.split_with_statx();
         let flags = iou::sqe::StatxFlags::AT_EMPTY_PATH;
         let mask = iou::sqe::StatxMode::STATX_SIZE;
-        ready!(ring.poll(ctx, 1, |sqs| {
-            let mut sqe = sqs.single().unwrap();
-            unsafe {
-                sqe.prep_statx(fd, CStr::from_ptr(&EMPTY), flags, mask, statx);
-            }
-            sqe
+        ready!(ring.poll(ctx, |sqe| unsafe {
+            sqe.prep_statx(fd, CStr::from_ptr(&EMPTY), flags, mask, statx)
         }))?;
         *pending = false;
         Poll::Ready(Ok((*statx).stx_size))
@@ -255,13 +251,7 @@ impl<D: Drive> AsyncBufRead for File<D> {
         let fd = self.fd();
         let (ring, buf, pos, pending) = self.split_with_buf();
         buf.fill_buf(|buf| {
-            let n = ready!(ring.poll(ctx, 1, |sqs| {
-                let mut sqe = sqs.single().unwrap();
-                unsafe {
-                    sqe.prep_read(fd, buf, *pos);
-                }
-                sqe
-            }))?;
+            let n = ready!(ring.poll(ctx, |sqe| unsafe { sqe.prep_read(fd, buf, *pos) }))?;
             *pending = false;
             *pos += n as u64;
             Poll::Ready(Ok(n as u32))
@@ -286,13 +276,7 @@ impl<D: Drive> AsyncWrite for File<D> {
             ready!(buf.fill_buf(|mut buf| {
                 Poll::Ready(Ok(io::Write::write(&mut buf, slice)? as u32))
             }))?;
-        let n = ready!(ring.poll(ctx, 1, |sqs| {
-            let mut sqe = sqs.single().unwrap();
-            unsafe {
-                sqe.prep_write(fd, data, *pos);
-            }
-            sqe
-        }))?;
+        let n = ready!(ring.poll(ctx, |sqe| unsafe { sqe.prep_write(fd, data, *pos) }))?;
         *pending = false;
         *pos += n as u64;
         buf.clear();
@@ -307,13 +291,11 @@ impl<D: Drive> AsyncWrite for File<D> {
     fn poll_close(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<io::Result<()>> {
         self.as_mut().guard_op(Op::Close);
         let fd = self.fd();
-        match ready!(self.as_mut().ring().poll(ctx, 1, |sqs| {
-            let mut sqe = sqs.single().unwrap();
-            unsafe {
-                sqe.prep_close(fd);
-            }
-            sqe
-        })) {
+        match ready!(self
+            .as_mut()
+            .ring()
+            .poll(ctx, |sqe| unsafe { sqe.prep_close(fd) }))
+        {
             Ok(_) => {
                 self.confirm_close(true);
                 Poll::Ready(Ok(()))
