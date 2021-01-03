@@ -111,7 +111,7 @@ impl<D: Drive> File<D> {
 
     fn guard_op(self: Pin<&mut Self>, op: Op) {
         let (ring, buf, _pos, active, pending) = self.split();
-        if *active == Op::Closed {
+        if *active == Op::Closed || *active == Op::Close {
             panic!("Attempted to perform IO on a closed File");
         } else if *pending {
             let new_buf = if op == Op::Statx {
@@ -223,11 +223,16 @@ impl<D: Drive> File<D> {
         self.fd
     }
 
-    fn confirm_close(self: Pin<&mut Self>) {
+    fn confirm_close(self: Pin<&mut Self>, succeed: bool) {
         let this = unsafe { Pin::get_unchecked_mut(self) };
-        this.active = Op::Closed;
+
         this.pending = false;
-        this.fd = -1;
+        if succeed {
+            this.active = Op::Closed;
+            this.fd = -1;
+        } else {
+            this.active = Op::Nothing;
+        }
     }
 }
 
@@ -302,15 +307,22 @@ impl<D: Drive> AsyncWrite for File<D> {
     fn poll_close(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<io::Result<()>> {
         self.as_mut().guard_op(Op::Close);
         let fd = self.fd();
-        ready!(self.as_mut().ring().poll(ctx, 1, |sqs| {
+        match ready!(self.as_mut().ring().poll(ctx, 1, |sqs| {
             let mut sqe = sqs.single().unwrap();
             unsafe {
                 sqe.prep_close(fd);
             }
             sqe
-        }))?;
-        self.confirm_close();
-        Poll::Ready(Ok(()))
+        })) {
+            Ok(_) => {
+                self.confirm_close(true);
+                Poll::Ready(Ok(()))
+            }
+            Err(e) => {
+                self.confirm_close(false);
+                Poll::Ready(Err(e))
+            }
+        }
     }
 }
 
@@ -361,7 +373,6 @@ impl<D: Drive> TryFrom<File<D>> for fs::File {
 
     fn try_from(mut file: File<D>) -> Result<Self, Self::Error> {
         // Reject when the file descriptor has been closed or there's an inflight close() request.
-        // TODO: the close() -> cancel() -> try_from() sequence is undetermined.
         if file.active == Op::Closed || file.active == Op::Close || file.fd < 0 {
             Err(io::Error::from_raw_os_error(libc::EBADF))
         } else {
@@ -378,7 +389,7 @@ impl<D: Drive> Drop for File<D> {
             let new_buf = Either::Left(Buffer::default());
             let buf = mem::replace(&mut self.buf, new_buf);
             let buf = Box::new(Cancellation::from(buf));
-            let fd = RawFdCancellation(self.fd());
+            let fd = RawFdCancellation::new(self.fd(), self.active == Op::Close);
             self.ring.cancel(Cancellation::from((buf, fd)));
         } else if self.active != Op::Closed && self.fd >= 0 {
             unsafe { libc::close(self.fd) };

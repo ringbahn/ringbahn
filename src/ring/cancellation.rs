@@ -107,16 +107,41 @@ unsafe impl Cancel for () {
 ///
 /// The `RawFd` type is a little special, which is defined as "type RawFd = c_int". It's unsafe to
 /// impl Cancel for RawFd, so introduce a newtype to safely reclaim RawFd on cancellation.
-pub struct RawFdCancellation(pub RawFd);
+pub struct RawFdCancellation(u64);
+
+impl RawFdCancellation {
+    pub fn new(fd: RawFd, pending_close: bool) -> Self {
+        let flags = if pending_close { 0x1u64 << 32 } else { 0 };
+
+        RawFdCancellation(fd as u64 | flags)
+    }
+}
 
 unsafe impl Cancel for RawFdCancellation {
     fn into_raw(self) -> (*mut (), usize) {
         (self.0 as usize as *mut (), 0)
     }
 
-    unsafe fn handle(data: *mut (), _metadata: usize, _result: Option<io::Result<u32>>) {
-        let fd = data as usize as RawFd;
-        libc::close(fd);
+    unsafe fn handle(data: *mut (), _metadata: usize, result: Option<io::Result<u32>>) {
+        let data = data as u64;
+        let fd = data as RawFd;
+        let pending_close = (data & 0x1_0000_0000u64) != 0;
+
+        if pending_close {
+            // Special handling for a pending IORING_OP_CLOSE request
+            match result {
+                // If the event has already completed, discard the cancellation request.
+                None => {}
+                // If the event succeeds, the file descriptor has already been closed.
+                Some(Ok(_)) => {}
+                // If the event fails, the file descriptor has not been closed yet.
+                Some(Err(_)) => {
+                    let _ = libc::close(fd);
+                }
+            }
+        } else {
+            libc::close(fd);
+        }
     }
 }
 
