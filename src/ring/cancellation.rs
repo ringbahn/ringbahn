@@ -1,5 +1,6 @@
 use std::any::Any;
 use std::ffi::CString;
+use std::io;
 use std::mem;
 use std::ptr;
 
@@ -16,12 +17,19 @@ use crate::buf::Buffer;
 pub struct Cancellation {
     data: *mut (),
     metadata: usize,
-    drop: unsafe fn(*mut (), usize),
+    handler: unsafe fn(*mut (), usize, Option<io::Result<u32>>),
 }
 
 pub unsafe trait Cancel {
     fn into_raw(self) -> (*mut (), usize);
-    unsafe fn drop_raw(data: *mut (), metadata: usize);
+
+    /// The handle() method will be called when in two cases:
+    /// - the Cancellation object has been dropped. It means the corresponding io_uring event
+    ///   has been completed or the Cancellation object has been discarded. The `result` parameter
+    ///   is set to None in this case.
+    /// - the cancelled event has been processed by the kernel. The 'result' parameter contains
+    ///   the `CQE::result()` returned from the kernel.
+    unsafe fn handle(data: *mut (), metadata: usize, result: Option<io::Result<u32>>);
 }
 
 unsafe impl<T> Cancel for Box<T> {
@@ -29,7 +37,7 @@ unsafe impl<T> Cancel for Box<T> {
         (Box::into_raw(self) as *mut (), 0)
     }
 
-    unsafe fn drop_raw(data: *mut (), _: usize) {
+    unsafe fn handle(data: *mut (), _metadata: usize, _result: Option<io::Result<u32>>) {
         drop(Box::from_raw(data as *mut T));
     }
 }
@@ -40,7 +48,7 @@ unsafe impl<T> Cancel for Box<[T]> {
         (Box::into_raw(self) as *mut (), len)
     }
 
-    unsafe fn drop_raw(data: *mut (), len: usize) {
+    unsafe fn handle(data: *mut (), len: usize, _result: Option<io::Result<u32>>) {
         drop(Vec::from_raw_parts(data as *mut T, len, len).into_boxed_slice());
     }
 }
@@ -57,7 +65,7 @@ unsafe impl Cancel for Box<dyn Any + Send + Sync> {
         (obj.data, obj.vtable as usize)
     }
 
-    unsafe fn drop_raw(data: *mut (), metadata: usize) {
+    unsafe fn handle(data: *mut (), metadata: usize, _result: Option<io::Result<u32>>) {
         let obj = TraitObject {
             data,
             vtable: metadata as *mut (),
@@ -71,8 +79,8 @@ unsafe impl Cancel for iou::registrar::RegisteredBuf {
         self.into_inner().into_raw()
     }
 
-    unsafe fn drop_raw(data: *mut (), metadata: usize) {
-        Box::<[u8]>::drop_raw(data, metadata)
+    unsafe fn handle(data: *mut (), metadata: usize, result: Option<io::Result<u32>>) {
+        Box::<[u8]>::handle(data, metadata, result)
     }
 }
 
@@ -81,7 +89,7 @@ unsafe impl Cancel for CString {
         (self.into_raw() as *mut (), 0)
     }
 
-    unsafe fn drop_raw(data: *mut (), _: usize) {
+    unsafe fn handle(data: *mut (), _metadata: usize, _result: Option<io::Result<u32>>) {
         drop(CString::from_raw(data as *mut libc::c_char));
     }
 }
@@ -91,7 +99,7 @@ unsafe impl Cancel for () {
         (ptr::null_mut(), 0)
     }
 
-    unsafe fn drop_raw(_: *mut (), _: usize) {}
+    unsafe fn handle(_data: *mut (), _metadata: usize, _result: Option<io::Result<u32>>) {}
 }
 
 pub unsafe trait CancelNarrow: Cancel {}
@@ -106,9 +114,17 @@ unsafe impl<T: CancelNarrow, U: CancelNarrow> Cancel for (T, U) {
         (left, right as usize)
     }
 
-    unsafe fn drop_raw(data: *mut (), metadata: usize) {
-        T::drop_raw(data, 0);
-        U::drop_raw(metadata as *mut (), 0);
+    unsafe fn handle(data: *mut (), metadata: usize, result: Option<io::Result<u32>>) {
+        let res = match result.as_ref() {
+            Some(Ok(v)) => Some(Ok(*v)),
+            Some(Err(e)) => Some(Err(io::Error::from_raw_os_error(
+                e.raw_os_error().unwrap_or(libc::EINVAL),
+            ))),
+            None => None,
+        };
+
+        T::handle(data, 0, result);
+        U::handle(metadata as *mut (), 0, res);
     }
 }
 
@@ -118,8 +134,12 @@ impl Cancellation {
         Cancellation {
             data,
             metadata,
-            drop: T::drop_raw,
+            handler: T::handle,
         }
+    }
+
+    pub fn handle(self, result: io::Result<u32>) {
+        unsafe { (self.handler)(self.data, self.metadata, Some(result)) }
     }
 }
 
@@ -158,6 +178,6 @@ unsafe impl Sync for Cancellation {}
 
 impl Drop for Cancellation {
     fn drop(&mut self) {
-        unsafe { (self.drop)(self.data, self.metadata) }
+        unsafe { (self.handler)(self.data, self.metadata, None) }
     }
 }

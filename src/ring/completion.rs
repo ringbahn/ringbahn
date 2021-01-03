@@ -97,7 +97,7 @@ impl Completion {
                 waker.wake();
             }
             Cancelled(callback) => {
-                drop(callback);
+                callback.handle(result);
                 drop(state);
                 drop(ManuallyDrop::into_inner(self.state));
             }
