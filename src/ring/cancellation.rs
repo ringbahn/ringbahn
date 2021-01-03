@@ -2,6 +2,7 @@ use std::any::Any;
 use std::ffi::CString;
 use std::io;
 use std::mem;
+use std::os::unix::io::RawFd;
 use std::ptr;
 
 use either::Either;
@@ -102,10 +103,28 @@ unsafe impl Cancel for () {
     unsafe fn handle(_data: *mut (), _metadata: usize, _result: Option<io::Result<u32>>) {}
 }
 
+/// A newtype to cancel a raw file descriptor.
+///
+/// The `RawFd` type is a little special, which is defined as "type RawFd = c_int". It's unsafe to
+/// impl Cancel for RawFd, so introduce a newtype to safely reclaim RawFd on cancellation.
+pub struct RawFdCancellation(pub RawFd);
+
+unsafe impl Cancel for RawFdCancellation {
+    fn into_raw(self) -> (*mut (), usize) {
+        (self.0 as usize as *mut (), 0)
+    }
+
+    unsafe fn handle(data: *mut (), _metadata: usize, _result: Option<io::Result<u32>>) {
+        let fd = data as usize as RawFd;
+        libc::close(fd);
+    }
+}
+
 pub unsafe trait CancelNarrow: Cancel {}
 
 unsafe impl<T> CancelNarrow for Box<T> {}
 unsafe impl CancelNarrow for CString {}
+unsafe impl CancelNarrow for RawFdCancellation {}
 
 unsafe impl<T: CancelNarrow, U: CancelNarrow> Cancel for (T, U) {
     fn into_raw(self) -> (*mut (), usize) {

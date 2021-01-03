@@ -11,7 +11,7 @@ use iou::{SQEs, SQE};
 
 use crate::drive::{self, Drive};
 
-pub use cancellation::{Cancel, CancelNarrow, Cancellation};
+pub use cancellation::{Cancel, CancelNarrow, Cancellation, RawFdCancellation};
 pub(crate) use completion::Completion;
 
 use State::*;
