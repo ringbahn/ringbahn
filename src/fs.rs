@@ -1,5 +1,6 @@
 //! Interact with the file system using io-uring
 
+use std::convert::TryFrom;
 use std::fs;
 use std::future::Future;
 use std::io;
@@ -355,11 +356,19 @@ impl From<fs::File> for File {
     }
 }
 
-impl<D: Drive> From<File<D>> for fs::File {
-    fn from(mut file: File<D>) -> fs::File {
-        file.cancel();
-        let file = ManuallyDrop::new(file);
-        unsafe { fs::File::from_raw_fd(file.fd) }
+impl<D: Drive> TryFrom<File<D>> for fs::File {
+    type Error = std::io::Error;
+
+    fn try_from(mut file: File<D>) -> Result<Self, Self::Error> {
+        // Reject when the file descriptor has been closed or there's an inflight close() request.
+        // TODO: the close() -> cancel() -> try_from() sequence is undetermined.
+        if file.active == Op::Closed || file.active == Op::Close || file.fd < 0 {
+            Err(io::Error::from_raw_os_error(libc::EBADF))
+        } else {
+            file.cancel();
+            file.active = Op::Closed;
+            unsafe { Ok(fs::File::from_raw_fd(file.fd)) }
+        }
     }
 }
 
