@@ -40,18 +40,24 @@ impl DemoDriver {
     ) -> Poll<io::Result<u32>> {
         start_completion_thread();
 
-        if let Some(listener) = &mut self.listener {
-            ready!(Pin::new(listener).poll(ctx));
-        }
+        loop {
+            if let Some(listener) = &mut self.listener {
+                ready!(Pin::new(listener).poll(ctx));
+            }
 
-        match sq.submit() {
-            Ok(n) => Poll::Ready(Ok(n)),
-            Err(err) => {
-                if err.raw_os_error().map_or(false, |code| code == libc::EBUSY) {
-                    self.listener = Some(QUEUES.3.listen());
-                    Poll::Pending
-                } else {
-                    Poll::Ready(Err(err))
+            match sq.submit() {
+                Ok(n) => {
+                    self.listener = None;
+                    return Poll::Ready(Ok(n));
+                }
+                Err(err) => {
+                    if err.raw_os_error().map_or(false, |code| code == libc::EBUSY) {
+                        if self.listener.is_none() {
+                            self.listener = Some(QUEUES.3.listen());
+                        }
+                    } else {
+                        return Poll::Ready(Err(err));
+                    }
                 }
             }
         }
@@ -89,7 +95,8 @@ impl Drive for DemoDriver {
     }
 
     fn poll_submit(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<io::Result<u32>> {
-        self.poll_submit_inner(ctx, &mut *QUEUES.0.lock())
+        let mut guard = QUEUES.0.lock();
+        self.poll_submit_inner(ctx, &mut *guard)
     }
 }
 
