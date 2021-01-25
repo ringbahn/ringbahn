@@ -1,4 +1,4 @@
-//! TCP bindings for `ringbahn`. 
+//! TCP bindings for `ringbahn`.
 
 mod listener;
 mod stream;
