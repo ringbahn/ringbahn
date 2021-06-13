@@ -1,13 +1,16 @@
-use ringbahn::*;
+use ringbahn::drive::demo;
+use ringbahn::event::Read;
+use ringbahn::Submission;
+
 use std::fs::{metadata, File};
 use std::io;
 use std::os::unix::io::AsRawFd;
 
 fn main() -> io::Result<()> {
-    let driver = drive::demo::driver();
+    let driver = demo::driver();
     let meta = metadata("props.txt")?;
     let file = File::open("props.txt")?;
-    let event = event::Read {
+    let event = Read {
         fd: file.as_raw_fd(),
         buf: vec![0; meta.len() as usize].into(),
         offset: 0
