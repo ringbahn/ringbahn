@@ -20,7 +20,7 @@ fn main() {
                     println!("read {} bytes", n);
                     buf[n] = b'\n';
                     stream.write_all(&buf[0..n + 1]).await.unwrap();
-                    println!("write {} bytes", n + 1);
+                    println!("wrote {} bytes", n + 1);
                 }
             });
         }
