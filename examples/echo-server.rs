@@ -11,7 +11,7 @@ fn main() {
     let pool = ThreadPool::new().unwrap();
     block_on(async move {
         while let Some(stream) = incoming.next().await {
-            println!("recieved connection");
+            println!("received connection");
             let (mut stream, _) = stream.unwrap();
             pool.spawn_ok(async move {
                 loop {
@@ -20,7 +20,7 @@ fn main() {
                     println!("read {} bytes", n);
                     buf[n] = b'\n';
                     stream.write_all(&buf[0..n + 1]).await.unwrap();
-                    println!("write {} bytes", n + 1);
+                    println!("wrote {} bytes", n + 1);
                 }
             });
         }
